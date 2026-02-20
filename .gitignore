@@ -1,4 +1,4 @@
-# Created by https://www.toptal.com/developers/gitignore/api/python,venv
+﻿# Created by https://www.toptal.com/developers/gitignore/api/python,venv
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,venv
 
 ### Python ###
@@ -184,7 +184,6 @@ pyrightconfig.json
 [Ll]ib
 [Ll]ib64
 [Ll]ocal
-[Ss]cripts
 pyvenv.cfg
 pip-selfcheck.json
 
