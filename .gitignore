@@ -189,3 +189,14 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,venv
+# OS 찌꺼기 파일 (맥북/윈도우 공통)
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+Thumbs.db
+ehthumbs.db
+desktop.ini
+*.pdf
+*.png
+*.md
