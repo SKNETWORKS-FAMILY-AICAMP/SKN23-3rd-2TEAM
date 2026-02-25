@@ -28,8 +28,19 @@ dependencies = [
     "python-dotenv (==1.2.1)",
     "psycopg[binary] (>=3.3.3,<4.0.0)",
     "sshtunnel (>=0.4.0,<0.5.0)",
-    "paramiko (>=4.0.0,<5.0.0)",
-    "sqlalchemy (>=2.0.46,<3.0.0)"
+    "paramiko (==3.5.0)",
+    "sqlalchemy (>=2.0.46,<3.0.0)",
+    "psycopg2-binary (>=2.9.11,<3.0.0)",
+    "pgvector (>=0.4.2,<0.5.0)",
+    "langgraph-checkpoint-postgres (>=3.0.4,<4.0.0)",
+    "python-multipart (>=0.0.22,<0.0.23)",
+    "python-jose[cryptography] (>=3.5.0,<4.0.0)",
+    "torch (>=2.10.0,<3.0.0)",
+    "torchvision (>=0.25.0,<0.26.0)",
+    "torchaudio (>=2.10.0,<3.0.0)",
+    "tavily-python (>=0.7.21,<0.8.0)",
+    "langchain-tavily (>=0.2.17,<0.3.0)",
+    "extra-streamlit-components (>=0.1.81,<0.2.0)"
 ]
 
 [build-system]

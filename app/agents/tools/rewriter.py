@@ -3,9 +3,9 @@
 # app/agents/tools/rewriter.py
 # ============================================================
 # 3단계 하이브리드 전처리 엔진:
-#   1단계: JARGON_MAP  — Python dict O(1) 치환 (무비용)
-#   2단계: BRAND_CODE_MAP — Regex 에러코드→브랜드 자동 추론 (무비용)
-#   3단계: gpt-4o-mini — 검색 최적화 쿼리 확장 (저비용)
+#   1단계: JARGON_MAP  — AWS RDS 동기화 (O(1) 치환)
+#   2단계: BRAND_CODE_MAP — Regex 에러코드→브랜드 자동 추론 (단어 경계 엄격 적용)
+#   3단계: gpt-4o — 검색 최적화 쿼리 확장 (과대 추론 방지 적용)
 #
 # RAW_DATA 실제 폴더/파일 구조(구글 드라이브) 기반:
 #   ABB_robot/      → IRC5, IRB1600/2400/2600/4600
@@ -16,16 +16,15 @@
 #   Yaskawa_robot/  → AR700/1440/1730/2010, YRC1000micro
 # ============================================================
 import re
-import csv
 from pathlib import Path
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.schemas.state import GraphState
-
+from app.core.config import MODEL_FAST
 
 # ─────────────────────────────────────────────────────────────
 # [1단계] 현장 은어 사전 — JARGON_MAP (O(1) 검색 최적화)
-#   CSV가 없으면 이 built-in 딕셔너리가 fallback으로 사용됩니다.
+#   AWS RDS 연결 실패 시에만 이 built-in 딕셔너리가 fallback으로 사용됩니다.
 # ─────────────────────────────────────────────────────────────
 _BUILTIN_JARGON_MAP: dict[str, str] = {
     # ── 로봇 동작 이상 ──────────────────────────────────────
@@ -43,7 +42,7 @@ _BUILTIN_JARGON_MAP: dict[str, str] = {
     "배터리":         "엔코더 배터리(Encoder Battery) 전압 저하",
     "리셋":           "알람 리셋(Alarm Reset) 절차",
     "떨어졌어":       "전압 강하(Voltage Drop) / 연결 해제",
-    "절었어":         "모터 탈조(Step-out) / 스텝 손실 발생",   # [NEW] 탈조
+    "절었어":         "모터 탈조(Step-out) / 스텝 손실 발생",
     "절어":           "모터 탈조(Step-out) / 스텝 손실 발생",
     # ── 용접 결함 ───────────────────────────────────────────
     "불똥":           "스패터(Spatter) 과다 발생",
@@ -69,7 +68,7 @@ _BUILTIN_JARGON_MAP: dict[str, str] = {
     "노이즈":         "전자기 간섭(EMI) 노이즈 필터링",
     "접지":           "접지(Grounding) 불량 / 누전",
     "타버림":         "릴레이(Relay) / 차단기(MCCB) 소손(Burnout)",
-    # ── 공구/장비 현장 은어 [NEW] ────────────────────────────
+    # ── 공구/장비 현장 은어 ────────────────────────────
     "임팩":           "임팩트 렌치(Impact Wrench)",
     "임팩트":         "임팩트 렌치(Impact Wrench)",
     "구라인다":       "그라인더(Angle Grinder)",
@@ -88,64 +87,71 @@ _BUILTIN_JARGON_MAP: dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# CSV 로더 (configs/jargon_map.csv — 관리자 편집 가능)
+# AWS RDS 로더 (jargon_map 테이블 전용)
 # ─────────────────────────────────────────────────────────────
-JARGON_MAP_CSV = Path(__file__).resolve().parents[3] / "configs" / "jargon_map.csv"
-
 def _load_jargon_map() -> dict[str, str]:
     """
-    configs/jargon_map.csv에서 은어 사전을 로드합니다.
-    파일이 없거나 오류 시 _BUILTIN_JARGON_MAP을 fallback으로 사용합니다.
+    AWS RDS의 jargon_map 테이블에서 은어 사전을 로드합니다.
+    DB 연결 실패 시 _BUILTIN_JARGON_MAP을 fallback으로 사용합니다.
     """
-    jargon = dict(_BUILTIN_JARGON_MAP)  # built-in을 기본값으로 복사
+    jargon = dict(_BUILTIN_JARGON_MAP)
+    import psycopg2
+    import os
+    
     try:
-        with open(JARGON_MAP_CSV, encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        ssh_enabled = os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true"
+        ssh_local_port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
+        target_host = "127.0.0.1" if ssh_enabled else os.getenv("PGHOST", "localhost")
+        target_port = ssh_local_port if ssh_enabled else os.getenv("PGPORT", "5432")
+        
+        conn = psycopg2.connect(
+            host=target_host,
+            database=os.getenv("PGDATABASE", "chatbot_db"),
+            user=os.getenv("PGUSER", "postgres"),
+            password=os.getenv("PGPASSWORD", "password"),
+            port=target_port,
+            connect_timeout=5
+        )
+        
+        with conn.cursor() as cur:
+            cur.execute("SELECT jargon, standard FROM jargon")
+            rows = cur.fetchall()
             count = 0
-            for row in reader:
-                slang    = row.get("현장_은어", "").strip()
-                standard = row.get("표준_기술_용어", "").strip()
+            for slang, standard in rows:
                 if slang and standard:
-                    jargon[slang] = standard  # CSV가 built-in을 덮어씀
+                    jargon[slang.strip()] = standard.strip()
                     count += 1
-        print(f"[Rewriter] JARGON_MAP: built-in {len(_BUILTIN_JARGON_MAP)}개 "
-              f"+ CSV {count}개 (합계 {len(jargon)}개)")
-    except FileNotFoundError:
-        print(f"[Rewriter] jargon_map.csv 없음 — built-in {len(jargon)}개 사용")
+            print(f"[Rewriter] RDS JARGON 로드 완료: {count}개 항목 추가됨.")
+        conn.close()
     except Exception as e:
-        print(f"[Rewriter] CSV 로드 오류: {e} — built-in 사용")
+        print(f"[Rewriter] RDS JARGON_MAP 로드 실패: {e} — built-in {len(_BUILTIN_JARGON_MAP)}개 사용")
+        
     return jargon
 
-# 서버 시작 시 1회 로드 (모듈 임포트 시점)
 JARGON_MAP: dict[str, str] = _load_jargon_map()
 
 
 # ─────────────────────────────────────────────────────────────
-# [2단계] 6대 브랜드 에러코드/모델명 자동 추론 (RAW_DATA 실제 구조 반영)
+# [2단계] 6대 브랜드 에러코드/모델명 자동 추론 (엄격한 단어 경계 적용)
 # ─────────────────────────────────────────────────────────────
 BRAND_CODE_MAP = [
-    # ── HD 현대로보틱스 (HH/HA/HC/HDR 시리즈, Hi5/Hi6 제어기) ──
+    # ── HD 현대로보틱스 ──
     (r"\bE0\d{2}\b",                   "현대로보틱스(HD) Hi5/Hi6 제어기"),
     (r"\bE[1-9]\d{3}\b",               "현대로보틱스(HD) Hi6 제어기"),
-    (r"\b(Hi5|Hi6|TP630|HDR|HH\d+|HA\d+|HC\d+)\b",
-                                       "현대로보틱스(HD)"),
-    # ── Yaskawa 야스카와 (AR700/1440/1730/2010, YRC1000micro) ──
+    (r"\b(Hi5|Hi6|TP630|HDR|HH\d+|HA\d+|HC\d+)\b", "현대로보틱스(HD)"),
+    # ── Yaskawa 야스카와 ──
     (r"\b41\d{2}\b",                   "야스카와(Yaskawa) YRC1000micro 제어기 알람코드"),
-    (r"\b(YRC1000|YRC|DX200|AR700|AR1440|AR1730|AR2010)\b",
-                                       "야스카와(Yaskawa)"),
-    # ── Doosan 두산로보틱스 (A-Series, MH-Series) ──
+    (r"\b(YRC1000|YRC|DX200|AR700|AR1440|AR1730|AR2010)\b", "야스카와(Yaskawa)"),
+    # ── Doosan 두산로보틱스 ──
     (r"\bM0\d{2}\b",                   "두산로보틱스(Doosan) 협동로봇"),
-    (r"\b(Doosan|두산|A-Series|MH-Series|doosan)\b",
-                                       "두산로보틱스(Doosan)"),
-    # ── ABB (IRC5, IRB 1600/2400/2600/4600) ──
+    (r"\b(Doosan|두산|A-Series|MH-Series|doosan)\b", "두산로보틱스(Doosan)"),
+    # ── ABB ──
     (r"\b3HAC\d+\b",                   "ABB IRC5 제어기"),
     (r"\b(IRC5|IRB\s?\d{3,4}|ABB)\b",  "ABB"),
-    # ── UR 유니버설로봇 (UR3/UR10e/UR20/UR30, e-Series) ──
-    (r"\b(UR3|UR10e?|UR20|UR30|UR5|e-Series|polyscope)\b",
-                                       "유니버설로봇(UR Universal Robots)"),
-    # ── RB 레인보우로보틱스 (RB5/RB10/RB16) ──
-    (r"\b(RB5|RB10|RB16|RB\d+|레인보우)\b",
-                                       "레인보우로보틱스(RB Rainbow Robotics)"),
+    # ── UR 유니버설로봇 ──
+    (r"\b(UR3|UR10e?|UR20|UR30|UR5|e-Series|polyscope|유알|유니버설로봇?)\b", "유니버설로봇(UR Universal Robots)"),
+    # ── RB 레인보우로보틱스 ──
+    (r"\b(RB5|RB10|RB16|RB\d+|레인보우(?:로보틱스)?)\b", "레인보우로보틱스(RB Rainbow Robotics)"),
 ]
 
 
@@ -170,7 +176,7 @@ def normalize_jargon(text: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# [3단계] LLM 쿼리 확장 프롬프트
+# [3단계] LLM 쿼리 확장 프롬프트 (과대 추론 방지 조항 추가)
 # ─────────────────────────────────────────────────────────────
 QUERY_REWRITER_PROMPT = """당신은 산업 현장 기술 문서(로봇/용접기/전기 배선) 전문 검색 쿼리 최적화 전문가입니다.
 [1차 정규화된 질문]과 [대화 맥락]을 바탕으로, 아래 6대 브랜드 매뉴얼 DB에서
@@ -185,12 +191,15 @@ QUERY_REWRITER_PROMPT = """당신은 산업 현장 기술 문서(로봇/용접�
 - 레인보우로보틱스(RB): RB5/RB10/RB16 시리즈
 
 [변환 원칙]
-1. 원본 질문의 핵심 의도(에러코드/증상/브랜드)를 반드시 유지하세요.
-2. 제조사+모델+에러코드를 구체적으로 포함하세요.
-3. 증상(Symptom), 원인(Cause), 조치(Action) 키워드를 모두 포함하세요.
-4. 한국어와 영문 기술 용어를 병행하세요. (예: "스패터(Spatter)")
-5. 질문이 완전한 일상 대화(날씨/정치 등)이면 "[GENERAL]"이라고만 출력하세요.
-6. 검색 쿼리 한 줄만 출력, 부가 설명 없음.
+1. [과대 추론 금지] 사용자의 원본 질문에 특정 브랜드(현대, 야스카와, 두산 등)나 모델명이 명시적으로 존재하지 않는다면, 단순 오타나 깨진 글자(예: '혀')를 보고 임의로 특정 브랜드를 추측하여 쿼리에 추가하지 마십시오.
+2. 포괄적인 질문("로봇 브랜드 알려줘", "용접기 추천해줘" 등)은 특정 브랜드로 좁히지 말고, 포괄적인 의미를 그대로 유지하여 정규화하십시오.
+3. 원본 질문의 핵심 의도(에러코드/증상/브랜드)를 반드시 유지하세요.
+4. 제조사+모델+에러코드를 구체적으로 포함하세요.
+5. 증상(Symptom), 원인(Cause), 조치(Action) 키워드를 모두 포함하세요.
+6. 한국어와 영문 기술 용어를 병행하세요. (예: "스패터(Spatter)")
+7. **[중요] 특정 로봇 브랜드(현대, 레인보우 등)에 대한 궁금증이나 언급이 있다면 일상 대화가 아닌 기술 질의로 간주하여 검색 쿼리를 생성하세요.**
+8. 질문이 완전히 기술/브랜드와 무관한 일상 대화(날씨/정치 등)인 경우에만 "[GENERAL]"이라고 출력하세요.
+9. 검색 쿼리 한 줄만 출력, 부가 설명 없음.
 
 [변환 예시]
 입력: "야스카와(Yaskawa) YRC1000micro 알람코드 41XX"
@@ -199,11 +208,8 @@ QUERY_REWRITER_PROMPT = """당신은 산업 현장 기술 문서(로봇/용접�
 입력: "현대로보틱스(HD) Hi6 E012 에러 배터리"
 출력: "현대로보틱스 HD Hi5 Hi6 TP630 E012 서보 엔코더 배터리(ER6VC119A) 교체 알람 리셋 절차"
 
-입력: "탄소강 MAG 용접 스패터(Spatter) 과다 발생"
-출력: "탄소강 MAG 용접 스패터 Spatter 과다 발생 원인 전압 와이어 가스 유량 콘택트 팁 조치"
-
-입력: "임팩트 렌치(Impact Wrench) 볼트 체결 토크"
-출력: "임팩트 렌치 Impact Wrench 볼트 체결 조임 토크 Nm 기준값 관리 방법"
+입력: "혀로봇브랜드 알려줘"
+출력: "산업용 다관절 로봇 브랜드 라인업 정보"
 
 [대화 맥락]
 {chat_history}
@@ -245,19 +251,54 @@ FEEDBACK_REWRITER_PROMPT = """당신은 산업 현장 기술 문서 검색 전�
 
 
 # ─────────────────────────────────────────────────────────────
+# [0단계] Fast Track - 소셜 인사 패턴 (Bypass LLM)
+# ─────────────────────────────────────────────────────────────
+SOCIAL_GREETING_PATTERNS = [
+    r"^(안녕\s*|하이\s*|hi\s*|hello\s*|반가워\s*|ㅎㅇ\s*|ㅎㄹ\s*)$",  
+    r"^(누구야|이름이 뭐야|뭐하는 애야|당신은 누구|너는 누구)$", 
+    r"^(고마워|감사|땡큐|thanks|thx)$",
+    r"^(잘가|바이|bye|수고)$",
+]
+
+def is_social_greeting(text: str) -> bool:
+    """단순 인사나 일상적인 대화인지 정규표현식으로 빠르게 판단합니다."""
+    clean_text = text.strip()
+    for pattern in SOCIAL_GREETING_PATTERNS:
+        if re.search(pattern, clean_text, re.IGNORECASE):
+            return True
+    return False
+
+# ─────────────────────────────────────────────────────────────
 # Public 유틸 함수
 # ─────────────────────────────────────────────────────────────
-def rewrite_query(original_query: str, chat_history: str = "") -> str:
+from typing import Tuple
+
+def rewrite_query(original_query: str, chat_history: str = "") -> Tuple[str, str]:
     """
-    현장 작업자의 짧은 질문을 3단계로 처리합니다.
-      1단계 — JARGON_MAP + BRAND_CODE_MAP 정규화 (무비용)
-      2단계 — gpt-4o-mini 기술 쿼리 확장
+    [V3.4] 쿼리 오염 방지를 위해 (확장쿼리, 라우팅힌트) 튜플을 반환합니다.
+      0단계 — Fast Track (인사/일상대화 감지)
+      1단계 — JARGON_MAP + BRAND_CODE_MAP 정규화
+      2단계 — gpt-4o 기술 쿼리 확장
     """
-    normalized = normalize_jargon(original_query)
+    current_jargon = JARGON_MAP
+
+    if is_social_greeting(original_query):
+        print(f"[Rewriter] 소셜 인사 감지 → Fast Track 발동")
+        return original_query, "SOCIAL"
+
+    normalized = original_query
+    for slang, standard in current_jargon.items():
+        normalized = re.sub(re.escape(slang), standard, normalized, flags=re.IGNORECASE)
+    
+    for pattern, brand_keyword in BRAND_CODE_MAP:
+        if re.search(pattern, normalized, flags=re.IGNORECASE):
+            if brand_keyword not in normalized:
+                normalized = f"{brand_keyword} {normalized}"
+
     print(f"[Rewriter] 원본:   '{original_query}'")
     print(f"[Rewriter] 정규화: '{normalized}'")
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", QUERY_REWRITER_PROMPT),
         ("human", "변환해주세요."),
@@ -268,58 +309,42 @@ def rewrite_query(original_query: str, chat_history: str = "") -> str:
         "chat_history":     chat_history or "없음",
     })
     rewritten = result.content.strip()
+    
+    if "[GENERAL]" in rewritten.upper():
+        print(f"[Rewriter] 일반 질문 감지 ([GENERAL]) → Supervisor 라우팅 유도")
+        return normalized, "GENERAL"
+
     print(f"[Rewriter] 확장:   '{rewritten}'")
-    return rewritten
+    return rewritten, "TECHNICAL"
 
 
 # ─────────────────────────────────────────────────────────────
 # LangGraph 노드 (async — LangGraph async 호환)
 # ─────────────────────────────────────────────────────────────
 async def rewriter_node(state: GraphState) -> dict:
-    """
-    LangGraph 쿼리 재작성 노드 (async).
-
-    [역할]
-      - 사용자의 첫 질문을 수신하여 3단계 쿼리 확장 수행
-      - original_question을 State에 고정 저장 (피드백 루프 내 의도 보존 앵커)
-      - rewritten_query를 State에 업데이트
-    """
     print("--- [Node: Rewriter] 쿼리 최적화 중 ---")
     messages = state.get("messages", [])
     if not messages:
-        return {"rewritten_query": "", "original_question": ""}
+        return {"rewritten_query": "", "original_question": "", "routing_hint": ""}
 
     original_query = messages[-1].content
-    # [원본 질문 앵커] 피드백 루프 재진입 시에도 최초 질문을 유지
     original_question = state.get("original_question") or original_query
 
-    # 모든 이전 메시지를 컨텍스트로 사용
     history_msgs = messages[:-1]
     chat_history = "\n".join([
         f"{'사용자' if msg.type == 'human' else 'AI'}: {msg.content}"
         for msg in history_msgs
     ]) if history_msgs else ""
 
-    rewritten = rewrite_query(original_query, chat_history)
+    rewritten, hint = rewrite_query(original_query, chat_history)
     return {
         "rewritten_query":   rewritten,
         "original_question": original_question,
+        "routing_hint":      hint,
     }
 
 
 async def feedback_rewriter_node(state: GraphState) -> dict:
-    """
-    Verifier 실패 후 피드백 기반 쿼리 재정교화 노드 (async).
-
-    [원본 의도 보존 설계]
-    - messages[0] (대화의 첫 번째 메시지) = 사용자의 최초 원본 질문
-    - state.original_question에도 저장되어 있으나 messages[0]을 최종 대조군으로 사용
-    - 피드백 루프를 반복해도 원래 의도에서 벗어나지 않음
-
-    [반환]
-    - rewritten_query: 개선된 검색 쿼리
-    - verifier_feedback: "" (소비 후 초기화 — 무한루프 방지)
-    """
     print("--- [Node: FeedbackRewriter] 피드백 기반 쿼리 재정교화 ---")
 
     prev_query  = state.get("rewritten_query", "")
@@ -331,10 +356,9 @@ async def feedback_rewriter_node(state: GraphState) -> dict:
         print("[FeedbackRewriter] 피드백 없음 — 기존 쿼리 유지")
         return {"verifier_feedback": ""}
 
-    # [원본 질문 앵커] messages[0] → 대화 최초 질문 (의도 대조군)
     original_question = (
-        state.get("original_question")          # State 저장값 우선
-        or (messages[0].content if messages else "")   # fallback: messages[0]
+        state.get("original_question")
+        or (messages[0].content if messages else "")
     )
 
     print(f"[FeedbackRewriter] retry_count: {retry_count}")
@@ -342,7 +366,7 @@ async def feedback_rewriter_node(state: GraphState) -> dict:
     print(f"[FeedbackRewriter] 기존 쿼리: '{prev_query[:80]}'")
     print(f"[FeedbackRewriter] 피드백:   '{feedback[:100]}'")
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", FEEDBACK_REWRITER_PROMPT),
         ("human", "쿼리를 재작성해주세요."),
@@ -358,6 +382,5 @@ async def feedback_rewriter_node(state: GraphState) -> dict:
 
     return {
         "rewritten_query":   refined_query,
-        "verifier_feedback": "",  # [중요] 소비 후 초기화 → 무한루프 방지
-        # original_question은 변경하지 않음 (앵커 유지)
+        "verifier_feedback": "", 
     }

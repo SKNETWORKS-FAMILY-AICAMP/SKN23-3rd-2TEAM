@@ -10,23 +10,45 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import GENERAL_PROMPT
 from app.schemas.state import GraphState
+from app.core.config import MODEL_FAST
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+from app.core.config import MODEL_FAST, MODEL_ACCURATE, TAVILY_API_KEY
 
 async def generate_general_answer(query: str) -> str:
     """
-    RAG 검색 없이 즉시 일반 안내 멘트를 생성합니다 (async).
+    [수정됨] Tavily 웹 검색 부분을 임시 주석 처리하고 LLM 단독 답변으로 처리합니다.
     """
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    # 1. Tavily 검색 도구 초기화 (주석 처리)
+    # search = TavilySearchResults(k=3)
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", GENERAL_PROMPT),
-        ("human", "{query}")
-    ])
-    
-    chain = prompt | llm
-    
-    print("[General Agent] 일반 대화 회피 로직을 실행 중입니다...")
-    response = await chain.ainvoke({"query": query})  # [FIX] async
-    return response.content
+    try:
+        # 2. 검색 수행 및 컨텍스트 생성 (주석 처리)
+        # search_results = await search.ainvoke({"query": query})
+        # context = "\n".join([f"Source: {r['url']}\nContent: {r['content']}" for r in search_results])
+        
+        # 3. LLM을 통한 답변 생성 (검색 결과 없이 직접 답변)
+        llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0.7)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", GENERAL_PROMPT), # + "\n\n아래는 웹 검색 결과입니다. 이를 바탕으로 친절하게 답변해주세요:\n{context}"),
+            ("human", "{query}")
+        ])
+        
+        chain = prompt | llm
+        response = await chain.ainvoke({"query": query}) #, "context": context})
+        return response.content
+        
+    except Exception as e:
+        print(f"[General Agent] Error: {e} -> Fallback to basic LLM")
+        llm = ChatOpenAI(model=MODEL_FAST, temperature=0.7)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", GENERAL_PROMPT),
+            ("human", "{query}")
+        ])
+        chain = prompt | llm
+        response = await chain.ainvoke({"query": query})
+        return response.content
 
 async def general_node(state: GraphState) -> dict:
     """

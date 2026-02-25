@@ -11,7 +11,7 @@
 from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 
-from app.rag.retriever import build_hybrid_retriever
+from app.rag.retriever import get_hybrid_retriever as build_hybrid_retriever
 from app.rag.reranker import rerank_documents
 
 # ── Advanced RAG 통합 함수 ──
@@ -78,7 +78,7 @@ def run_advanced_rag(
 
     # 1. 하이브리드 검색 실행
     hybrid = build_hybrid_retriever(
-        documents=documents,
+        query=query,
         vector_weight=vector_weight,
         bm25_weight=bm25_weight,
         k=k,
@@ -136,15 +136,53 @@ class PGVectorRetriever:
 
 def run_rag_pipeline(query: str, domain: str, filters: Dict[str, Any] = None) -> str:
     """
-    레거시 단순 RAG 파이프라인 (Placeholder 기반).
-    Advanced RAG 도입 전 호환성을 위해 유지합니다.
-    실제 운영에서는 run_advanced_rag()로 전환하세요.
+    실제 Advanced RAG 파이프라인(Hybrid + Rerank)을 실행합니다.
+    기존 Specialist 노드들과의 호환성을 위해 유지하며, 내부적으로 run_advanced_rag를 호출합니다.
     """
-    retriever = PGVectorRetriever()
+    # 94k 데이터를 RDS에서 매번 가져와 BM25를 만드는 것은 비효율적이므로, 
+    # build_hybrid_retriever(get_hybrid_retriever) 내부의 캐싱 로직을 활용합니다.
+    
+    # run_advanced_rag는 documents를 인자로 받는데, 
+    # build_hybrid_retriever는 이미 vector_store를 통해 내부적으로 처리하므로 
+    # run_advanced_rag의 구조를 리팩토링하거나 직접 로직을 작성합니다.
+    
+    # [FIX] run_advanced_rag의 logic을 직접 구현 (Hybrid + Rerank)
+    print(f"[RAG Pipeline] Starting Advanced RAG for query: {query}")
+    
+    # 1. Hybrid Retriever 가져오기 (캐시 활용, 쿼리 전달로 동적 가중치 활성화)
+    hybrid_retriever = build_hybrid_retriever(query=query, collection_name="welding_robotics_manuals")
+    
+    # 2. 검색 수행 (k=10)
+    retrieved_docs = hybrid_retriever.invoke(query)
+    
+    # 3. 도메인 필터링 (메타데이터 'domain' 기준)
     if domain:
-        filters = filters or {}
-        filters["domain"] = domain
+        domain_map = {
+            "ROBOT": "ROBOT",
+            "WELD": "WELD",
+            "ELEC": "ELEC"
+        }
+        target_domain = domain_map.get(domain.upper(), domain)
+        filtered = [
+            doc for doc in retrieved_docs 
+            if doc.metadata.get("domain") == target_domain
+        ]
+        retrieved_docs = filtered if filtered else retrieved_docs
 
-    retrieved_docs = retriever.retrieve(query, metadata_filters=filters)
-    context = "\n\n---\n\n".join(retrieved_docs)
+    # 4. Reranking
+    top_docs, is_found = rerank_documents(
+        query=query,
+        documents=retrieved_docs,
+        top_n=4
+    )
+    
+    if not is_found or not top_docs:
+        return "(관련 매뉴얼 없음)"
+
+    # 5. Context 생성
+    context = "\n\n---\n\n".join([
+        f"[출처: {doc.metadata.get('source_file','?')} | {doc.metadata.get('Header 1','?')}]\n{doc.page_content}"
+        for doc in top_docs
+    ])
+    
     return context

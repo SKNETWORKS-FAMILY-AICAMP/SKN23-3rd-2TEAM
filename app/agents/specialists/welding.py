@@ -13,10 +13,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import WELDING_SPECIALIST_PROMPT
 from app.schemas.state import GraphState
+from app.core.config import MODEL_ACCURATE
 
 async def generate_welding_answer(query: str, context: str) -> str:
     """RAG Context를 사용하여 용접 특화 답변을 생성합니다 (async)."""
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", WELDING_SPECIALIST_PROMPT),
         ("human", "{query}")

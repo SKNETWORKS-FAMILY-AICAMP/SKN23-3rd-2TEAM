@@ -18,124 +18,63 @@ from app.agents.specialists.robotics import robotics_node
 from app.agents.specialists.welding import welding_node
 from app.agents.specialists.electrical import electrical_node
 from app.agents.specialists.general import general_node
+from app.agents.specialists.social import social_node
 from app.agents.tools.rewriter import rewriter_node, feedback_rewriter_node
 from app.core.security import verifier_node
 
-# ── Fallback 로그 경로 (① 관리자 로그 수집) ──────────────────
-FALLBACK_LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "fallback_queries.jsonl"
+# ─────────────────────────────────────────────────────────────
+# 유틸리티 노드 및 조건부 라우팅 함수
+# ─────────────────────────────────────────────────────────────
 
-FALLBACK_MESSAGE = (
-    "현재 시스템의 매뉴얼 및 DB에서는 안전하고 정확한 해결책을 찾을 수 없습니다. "
-    "억측으로 인한 설비 파손 및 안전사고를 방지하기 위해, "
-    "현대로보틱스 고객센터(1588-4415)나 원본 매뉴얼을 직접 확인해 주십시오."
-)
+async def reroute_supervisor_node(state: GraphState) -> dict:
+    """도메인 불일치 감지 시 재분류를 위해 상태를 업데이트합니다."""
+    print("--- [Node: Supervisor Reroute] 도메인 재분류를 준비합니다 ---")
+    return {"routing_retry": state.get("routing_retry", 0) + 1}
 
-def fallback_node(state: GraphState) -> dict:
-    """
-    Verifier 최대 재시도(retry_count >= 2) 또는 도메인 재분류 실패 후 발동하는 안전망.
-
-    ① [관리자 로그 수집] fallback으로 들어온 질문을 JSONL로 기록합니다.
-      → 관리자가 매주 이 파일을 보고 누락된 매뉴얼을 파악/업로드할 수 있습니다.
-      → 저장 경로: logs/fallback_queries.jsonl
-    """
-    messages    = state.get("messages", [])
-    question    = state.get("original_question") or (messages[-1].content if messages else "")
-    category    = state.get("category","?")
-    retry_count = state.get("retry_count", 0)
-    routing_retry = state.get("routing_retry", 0)
-
-    print(f"--- [Node: Fallback] ⚠️ 안전망 발동 ---")
-    print(f"  질문: '{question[:60]}'  category={category}  "
-          f"retry={retry_count}  routing_retry={routing_retry}")
-
-    # ① 관리자용 JSONL 로그 수집
-    try:
-        FALLBACK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        log_entry = {
-            "timestamp":     datetime.now().isoformat(),
-            "question":      question,
-            "category":      category,
-            "retry_count":   retry_count,
-            "routing_retry": routing_retry,
-            "rewritten_query": state.get("rewritten_query",""),
-            "verifier_feedback": state.get("verifier_feedback",""),
-        }
-        with open(FALLBACK_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        print(f"  [Fallback] 📝 로그 기록 완료: {FALLBACK_LOG_PATH}")
-    except Exception as e:
-        print(f"  [Fallback] ⚠️ 로그 기록 실패: {e}")
-
+async def fallback_node(state: GraphState) -> dict:
+    """모든 복구 시도가 실패했을 때의 최종 답변 노드."""
+    print("--- [Node: Fallback] 최종 복구 답변을 생성합니다 ---")
     return {
-        "generated_answer":  FALLBACK_MESSAGE,
-        "is_hallucinated":   False,
-        "verifier_feedback": "",
-        "domain_mismatch":   False,
+        "generated_answer": "죄송합니다. 요청하신 기술 질의에 대해 충분한 정보를 찾지 못했거나 내부 오류가 발생했습니다. 구체적인 장비 모델명과 증상을 다시 말씀해 주시면 성심껏 도와드리겠습니다.",
+        "is_hallucinated": False
     }
+
+def route_feedback_to_specialist(state: GraphState) -> str:
+    """피드백 기반 재작성 후 다시 원래의 전문가로 라우팅합니다."""
+    category = state.get("category", "general")
+    if category not in ["robotics", "welding", "electrical", "general"]:
+        return "general"
+    return category
+
+def check_domain_mismatch(state: GraphState) -> str:
+    """Specialist가 감지한 도메인 불일치에 따라 다음 노드를 선택합니다."""
+    if state.get("domain_mismatch"):
+        if state.get("routing_retry", 0) < 1:
+            return "supervisor_reroute"
+        return "fallback"
+    return "verifier"
+
+def check_hallucination(state: GraphState) -> str:
+    """Verifier의 환각 판정 결과에 따라 다음 노드를 선택합니다."""
+    if state.get("is_hallucinated"):
+        if state.get("retry_count", 0) < 2:
+            return "feedback_rewriter"
+        return "fallback"
+    return END
+
+def route_after_rewrite(state: GraphState) -> str:
+    """쿼리 재작성 후 소셜 인사인지 전문 기술 질의인지 판단하여 라우팅합니다."""
+    hint = state.get("routing_hint", "TECHNICAL")
+    if hint == "SOCIAL":
+        return "social"
+    # [GENERAL] 또는 [TECHNICAL]은 모두 Supervisor로 보내어 Intent 기반 최종 분류 수행
+    return "supervisor"
 
 def route_to_specialist(state: GraphState) -> str:
     """Supervisor의 category 결정에 따라 specialist를 선택합니다."""
     return state.get("category", "general")
 
-def check_domain_mismatch(state: GraphState) -> str:
-    """
-    specialist가 domain_mismatch=True를 반환했을 때의 라우팅 결정.
-
-    ③ [무한루프 방지] routing_retry >= 1이면 fallback으로 진행합니다.
-        같은 질문이 계속 라우팅 실패를 반복하는 루프를 1회로 제한.
-    """
-    if not state.get("domain_mismatch", False):
-        return "verifier"  # 정상 → 검증 단계로
-
-    routing_retry = state.get("routing_retry", 0)
-    if routing_retry >= 1:
-        print(f"[DomainGuard] ⚠️ routing_retry={routing_retry} ≥ 1 → fallback (무한루프 방지)")
-        return "fallback"
-
-    category = state.get("category","?")
-    print(f"[DomainGuard] 🔄 도메인 불일치 (1회 허용) → supervisor 재분류 (현재 category={category})")
-    return "supervisor_reroute"  # supervisor로 재분류 요청
-
-async def reroute_supervisor_node(state: GraphState) -> dict:
-    """
-    domain_mismatch 발생 시 supervisor를 재호출하여 도메인을 재분류합니다 (async).
-    """
-    print("--- [Node: SupervisorReroute] 도메인 재분류 시도 ---")
-    routing_retry = state.get("routing_retry", 0)
-    # supervisor_node (async) 호출
-    result = await supervisor_node(state)  # [FIX] await 추가
-    result["routing_retry"]  = routing_retry + 1
-    result["domain_mismatch"] = False  # 초기화
-    old_cat = state.get("category","?")
-    new_cat = result.get("category","?")
-    print(f"  [Reroute] {old_cat} → {new_cat}  (routing_retry={routing_retry+1})")
-    return result
-
-def check_hallucination(state: GraphState) -> str:
-    """
-    Verifier 결과 기반 라우팅.
-
-    ✅ 통과             → END
-    🔄 실패 + retry<2   → feedback_rewriter (피드백 기반 재정교화)
-    ❌ 실패 + retry≥2   → fallback (안전망)
-    """
-    is_hallucinated = state.get("is_hallucinated", False)
-    retry_count     = state.get("retry_count", 0)
-
-    if not is_hallucinated:
-        print(f"[check_hallucination] ✅ 통과 → END")
-        return END
-
-    if retry_count < 2:
-        print(f"[check_hallucination] 🔄 실패 (retry={retry_count}) → feedback_rewriter")
-        return "feedback_rewriter"
-
-    print(f"[check_hallucination] ❌ 한도 초과 (retry={retry_count}) → fallback")
-    return "fallback"
-
-def route_feedback_to_specialist(state: GraphState) -> str:
-    """feedback_rewriter 완료 후 원래 도메인 specialist로 돌아갑니다."""
-    return state.get("category", "general")
+# ... (check_domain_mismatch and check_hallucination remain same) ...
 
 # ─────────────────────────────────────────────────────────────
 # 그래프 구성
@@ -149,14 +88,24 @@ workflow.add_node("robotics",           robotics_node)
 workflow.add_node("welding",            welding_node)
 workflow.add_node("electrical",         electrical_node)
 workflow.add_node("general",            general_node)
+workflow.add_node("social",             social_node)
 workflow.add_node("verifier",           verifier_node)
 workflow.add_node("feedback_rewriter",  feedback_rewriter_node)
 workflow.add_node("fallback",           fallback_node)
-workflow.add_node("supervisor_reroute", reroute_supervisor_node)  # ③ 도메인 재분류
+workflow.add_node("supervisor_reroute", reroute_supervisor_node)
 
-# 기본 흐름: START → rewriter → supervisor
+# START -> rewriter
 workflow.add_edge(START, "rewriter")
-workflow.add_edge("rewriter", "supervisor")
+
+# [Fast Track] Rewriter → (Social 바로가기 | Supervisor 기술 분류)
+workflow.add_conditional_edges(
+    "rewriter",
+    route_after_rewrite,
+    {
+        "social":     "social",
+        "supervisor": "supervisor"
+    }
+)
 
 # Supervisor → 도메인별 specialist
 workflow.add_conditional_edges(
@@ -194,8 +143,9 @@ workflow.add_conditional_edges(
     }
 )
 
-# general → 검증 없이 END
+# general & social → 검증 없이 즉시 END (Fast Track 완료)
 workflow.add_edge("general", END)
+workflow.add_edge("social", END)
 
 # Verifier → (통과: END | 실패: feedback_rewriter | 한도초과: fallback)
 workflow.add_conditional_edges(
@@ -223,5 +173,14 @@ workflow.add_conditional_edges(
 # Fallback → END
 workflow.add_edge("fallback", END)
 
-memory = get_memory_saver()
-app_graph = workflow.compile(checkpointer=memory)
+# ─────────────────────────────────────────────────────────────
+# 그래프 컴파일 및 내보내기
+# ─────────────────────────────────────────────────────────────
+
+# 기본적으로는 MemorySaver를 사용하지만, main.py나 서버 기동부에서 RDS 세이버로 교체 가능
+default_memory = get_memory_saver()
+app_graph = workflow.compile(checkpointer=default_memory)
+
+def compile_workflow(checkpointer):
+    """지정된 체크포인터로 워크플로우를 컴파일합니다."""
+    return workflow.compile(checkpointer=checkpointer)
