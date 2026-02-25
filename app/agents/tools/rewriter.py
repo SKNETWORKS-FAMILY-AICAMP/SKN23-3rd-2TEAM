@@ -16,6 +16,7 @@
 #   Yaskawa_robot/  → AR700/1440/1730/2010, YRC1000micro
 # ============================================================
 import re
+import threading
 from pathlib import Path
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -128,7 +129,22 @@ def _load_jargon_map() -> dict[str, str]:
         
     return jargon
 
-JARGON_MAP: dict[str, str] = _load_jargon_map()
+_JARGON_MAP_CACHE: dict[str, str] | None = None
+_JARGON_MAP_LOCK = threading.Lock()
+
+def get_jargon_map() -> dict[str, str]:
+    """
+    Delay DB-backed jargon loading until first use.
+    This avoids import-time connection attempts before SSH tunnel startup.
+    """
+    global _JARGON_MAP_CACHE
+    if _JARGON_MAP_CACHE is not None:
+        return _JARGON_MAP_CACHE
+
+    with _JARGON_MAP_LOCK:
+        if _JARGON_MAP_CACHE is None:
+            _JARGON_MAP_CACHE = _load_jargon_map()
+    return _JARGON_MAP_CACHE
 
 
 # ─────────────────────────────────────────────────────────────
@@ -165,7 +181,7 @@ def normalize_jargon(text: str) -> str:
     """
     normalized = text
     # 1단계: 은어 치환
-    for slang, standard in JARGON_MAP.items():
+    for slang, standard in get_jargon_map().items():
         normalized = re.sub(re.escape(slang), standard, normalized, flags=re.IGNORECASE)
     # 2단계: 브랜드 에러코드 추론
     for pattern, brand_keyword in BRAND_CODE_MAP:
@@ -280,7 +296,7 @@ def rewrite_query(original_query: str, chat_history: str = "") -> Tuple[str, str
       1단계 — JARGON_MAP + BRAND_CODE_MAP 정규화
       2단계 — gpt-4o 기술 쿼리 확장
     """
-    current_jargon = JARGON_MAP
+    current_jargon = get_jargon_map()
 
     if is_social_greeting(original_query):
         print(f"[Rewriter] 소셜 인사 감지 → Fast Track 발동")
