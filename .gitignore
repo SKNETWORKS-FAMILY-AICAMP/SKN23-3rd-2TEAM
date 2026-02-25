@@ -200,3 +200,9 @@ desktop.ini
 *.pdf
 *.png
 *.md
+*.json 
+# Local Models & Caches
+models/**
+data/cache/**
+logs/*.jsonl
+*.csv 
