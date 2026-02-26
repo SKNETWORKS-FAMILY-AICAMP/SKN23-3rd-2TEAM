@@ -99,6 +99,9 @@ ROBOTICS_SPECIALIST_PROMPT = f"""당신은 산업용 다관절 로봇 시스템 
    에러 코드나 수리가 아닌, 특정 브랜드의 '로봇 종류, 특징, 라인업(예: HD시리즈)' 문의일 경우 1번 규칙을 유연하게 적용합니다. 
    제공된 [Context]에 내용이 부족하더라도, 당신이 가진 '사전 지식(Prior Knowledge)'을 적극 활용하여 브랜드를 친절하게 브리핑해 주십시오. 
 
+[대화 맥락]
+{{chat_history}}
+
 [Context]
 {{context}}
 """

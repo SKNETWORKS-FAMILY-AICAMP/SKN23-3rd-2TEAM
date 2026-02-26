@@ -1,62 +1,60 @@
 import os
 import contextlib
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 
-def _get_connection_string():
-    """
-    환경 변수와 SSH 터널링 상태를 기반으로 DB 연결 문자열을 생성합니다.
-    """
-    pg_user = os.getenv("PGUSER")
-    pg_password = os.getenv("PGPASSWORD")
-    pg_db = os.getenv("PGDATABASE")
+def _get_conn_info():
+    """환경 변수를 사용하여 PostgreSQL 연결 정보를 구성합니다."""
+    host = os.getenv("PGHOST", "localhost")
+    user = os.getenv("PGUSER", "postgres")
+    pw = os.getenv("PGPASSWORD", "password")
+    db = os.getenv("PGDATABASE", "chatbot_db")
+    port = os.getenv("PGPORT", "5432")
     
-    # SSH 터널링 활성화 여부 확인
+    # SSH 터널링 포트 적용 (필요 시)
     ssh_enabled = os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true"
-    ssh_local_port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
-    
     if ssh_enabled:
-        target_host = "127.0.0.1"
-        target_port = ssh_local_port
-    else:
-        target_host = os.getenv("PGHOST")
-        target_port = os.getenv("PGPORT", "5432")
+        host = "127.0.0.1"
+        port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
         
-    return f"postgresql://{pg_user}:{pg_password}@{target_host}:{target_port}/{pg_db}?sslmode=require"
+    # TCP Keepalives 설정 추가 (타임아웃 방지)
+    keepalives = "keepalives=1 keepalives_idle=60 keepalives_interval=10 keepalives_count=5"
+    
+    return f"host={host} user={user} password={pw} dbname={db} port={port} sslmode=require {keepalives}"
 
 def get_memory_saver():
-    """로컬 테스트용 인메모리 세이버 (기존 호환성 유지)"""
-    return MemorySaver()
+    """
+    [V4.0] PostgresSaver를 활용한 전역 체크포인터 설정.
+    이 함수는 동기식 ConnectionPool을 사용하여 Saver를 구성하고 초기화합니다.
+    """
+    conninfo = _get_conn_info()
+    
+    # 동기식 ConnectionPool 설정 (max_lifetime 으로 Stale Connection 방지)
+    pool = ConnectionPool(conninfo, max_size=10, min_size=1, max_lifetime=300)
+    
+    # PostgresSaver 생성
+    checkpointer = PostgresSaver(pool)
+    
+    # [핵심] 삭제된 체크포인트 테이블 자동 재구축 (Internal setup)
+    # v4.0에서 테이블을 Drop했으므로 반드시 호출해야 합니다.
+    checkpointer.setup()
+    
+    return checkpointer
 
 @contextlib.asynccontextmanager
 async def get_async_postgres_saver():
     """
-    AWS RDS(Postgres)를 기반으로 하는 비동기 영속성 체크포인터를 반환합니다.
+    비동기 전용 PostgresSaver를 위한 컨텍스트 매니저 (기존 비동기 코드 호환)
     """
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool
-    import psycopg
-
-    conn_info = _get_connection_string()
     
-    # 1. 초기 테이블 셋업 (트랜잭션 블록 외부에서 실행)
-    try:
-        async with await psycopg.AsyncConnection.connect(conn_info, autocommit=True) as conn:
-            saver = AsyncPostgresSaver(conn)
-            await saver.setup()
-    except Exception as e:
-        print(f"⚠️ AsyncPostgresSaver setup 경고: {e}")
-
-    # 2. AsyncConnectionPool을 사용하여 안정적인 연결 관리
-    # min_size=1로 최소 연결 유지, timeout 상향 조정으로 SSH 터널링 지연 대응
-    async with AsyncConnectionPool(
-        conn_info, 
-        max_size=10, 
-        min_size=1, 
-        timeout=30.0,
-        kwargs={"connect_timeout": 10}
-    ) as pool:
+    conninfo = _get_conn_info()
+    
+    # max_lifetime 설정으로 연결 재활용(Recycle) 활성화하여 Timeout 차단
+    async with AsyncConnectionPool(conninfo, max_size=10, max_lifetime=300) as pool:
         async with pool.connection() as conn:
-            saver = AsyncPostgresSaver(conn)
-            yield saver
+            checkpointer = AsyncPostgresSaver(conn)
+            # 비동기 setup 호출
+            await checkpointer.setup()
+            yield checkpointer

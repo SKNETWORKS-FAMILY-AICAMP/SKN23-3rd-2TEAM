@@ -40,7 +40,14 @@ dependencies = [
     "torchaudio (>=2.10.0,<3.0.0)",
     "tavily-python (>=0.7.21,<0.8.0)",
     "langchain-tavily (>=0.2.17,<0.3.0)",
-    "extra-streamlit-components (>=0.1.81,<0.2.0)"
+    "extra-streamlit-components (>=0.1.81,<0.2.0)",
+    "passlib[bcrypt] (>=1.7.4,<2.0.0)",
+    "streamlit-cookies-controller (>=0.0.4,<0.0.5)",
+    "authlib (>=1.6.8,<2.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+    "itsdangerous (>=2.2.0,<3.0.0)",
+    "boto3 (>=1.42.57,<2.0.0)",
+    "sseclient-py (>=1.9.0,<2.0.0)"
 ]
 
 [build-system]

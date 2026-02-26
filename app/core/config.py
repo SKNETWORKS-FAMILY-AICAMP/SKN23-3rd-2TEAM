@@ -54,8 +54,8 @@ def get_device():
     return "cpu"
 
 # 3. 모델 설정
-MODEL_FAST = "gpt-4o"      # 쿼리 재작성, 분류, 검증 (Speed)
-MODEL_ACCURATE = "gpt-4o"      # 실제 답변 생성 (Accuracy)
+MODEL_FAST = "gpt-5.2"      # 쿼리 재작성, 분류, 검증 (Speed)
+MODEL_ACCURATE = "gpt-5.2"      # 실제 답변 생성 (Accuracy)
 
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 RERANKER_LOCAL_PATH = MODELS_DIR / "bge-reranker-v2-m3"
