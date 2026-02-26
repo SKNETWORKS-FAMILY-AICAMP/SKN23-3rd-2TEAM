@@ -1,7 +1,18 @@
 import os
+import sys
+import asyncio
 import contextlib
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
+
+# =====================================================================
+# [핵심 패치] Windows 환경에서 psycopg 비동기 호환성 문제 해결
+# 윈도우일 경우 강제로 호환 가능한 SelectorEventLoopPolicy로 변경합니다.
+# 맥(darwin)이나 리눅스(linux)일 경우에는 기본값을 그대로 유지합니다.
+# =====================================================================
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 
 def _get_conn_info():
     """환경 변수를 사용하여 PostgreSQL 연결 정보를 구성합니다."""
