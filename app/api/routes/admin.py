@@ -20,6 +20,11 @@ class UploadResponse(BaseModel):
     db_chunks_skipped: int = 0
     db_chunks_deleted: int = 0
     file_hash: str | None = None
+    bm25_cache_updated: bool | None = None
+    bm25_status: str | None = None
+    bm25_total_docs: int | None = None
+    bm25_source_docs: int | None = None
+    bm25_prev_source_docs: int | None = None
 
 
 @router.post("/upload_pdf", response_model=UploadResponse)
@@ -68,6 +73,11 @@ async def upload_pdf(
             db_chunks_skipped=ingest_result["db_chunks_skipped"],
             db_chunks_deleted=ingest_result["db_chunks_deleted"],
             file_hash=ingest_result["file_hash"],
+            bm25_cache_updated=ingest_result.get("bm25_cache_updated"),
+            bm25_status=ingest_result.get("bm25_status"),
+            bm25_total_docs=ingest_result.get("bm25_total_docs"),
+            bm25_source_docs=ingest_result.get("bm25_source_docs"),
+            bm25_prev_source_docs=ingest_result.get("bm25_prev_source_docs"),
         )
     except HTTPException:
         raise

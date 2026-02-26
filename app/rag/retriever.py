@@ -2,6 +2,7 @@ import os
 import pickle
 import time
 import re
+import json
 from typing import List
 
 from langchain_community.retrievers import BM25Retriever
@@ -28,6 +29,33 @@ def korean_custom_preprocess(text: str) -> List[str]:
     # 한글, 영문, 숫자를 제외한 모든 특수기호를 공백으로 치환
     text = re.sub(r'[^가-힣A-Za-z0-9]', ' ', text)
     return text.split()
+
+
+def _doc_fingerprint(doc: Document) -> str:
+    payload = {
+        "page_content": doc.page_content,
+        "metadata": doc.metadata or {},
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _atomic_dump_bm25_cache(retriever: BM25Retriever) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = BM25_CACHE_PATH.with_suffix(BM25_CACHE_PATH.suffix + ".tmp")
+    with open(tmp_path, "wb") as f:
+        pickle.dump(retriever, f)
+    os.replace(tmp_path, BM25_CACHE_PATH)
+
+
+def _load_cached_bm25_from_memory_or_file() -> BM25Retriever | None:
+    global CACHED_BM25_RETRIEVER
+    if CACHED_BM25_RETRIEVER is not None:
+        return CACHED_BM25_RETRIEVER
+    if BM25_CACHE_PATH.exists():
+        with open(BM25_CACHE_PATH, "rb") as f:
+            CACHED_BM25_RETRIEVER = pickle.load(f)
+        return CACHED_BM25_RETRIEVER
+    return None
 
 def _load_or_create_bm25_retriever(vector_store):
     """
@@ -75,6 +103,103 @@ def _load_or_create_bm25_retriever(vector_store):
     except Exception as e:
         print(f"❌ BM25 인덱스 생성 실패: {e}")
         raise e
+
+def update_bm25_cache_for_uploaded_source(
+    uploaded_docs: List[Document],
+    *,
+    source_file: str | None = None,
+) -> dict[str, object]:
+    """
+    Incrementally update the local BM25 cache by replacing documents for one source_file.
+
+    This avoids a full RDS download during admin uploads. It only reads/writes the local
+    `bm25_retriever.pkl` and swaps the chunks for the uploaded file.
+    """
+    global CACHED_BM25_RETRIEVER
+
+    clean_docs = [
+        doc for doc in (uploaded_docs or [])
+        if isinstance(doc, Document) and isinstance(doc.page_content, str) and doc.page_content.strip()
+    ]
+    if not clean_docs:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_empty_upload",
+            "bm25_total_docs": None,
+            "bm25_source_docs": 0,
+            "bm25_prev_source_docs": None,
+        }
+
+    if source_file is None:
+        source_values = {
+            str((doc.metadata or {}).get("source_file", "")).strip()
+            for doc in clean_docs
+        }
+        source_values.discard("")
+        if len(source_values) == 1:
+            source_file = next(iter(source_values))
+
+    source_file = (source_file or "").strip()
+    if not source_file:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_missing_source_file",
+            "bm25_total_docs": None,
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": None,
+        }
+
+    cached = _load_cached_bm25_from_memory_or_file()
+    if cached is None:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_cache_not_found",
+            "bm25_total_docs": None,
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": None,
+        }
+
+    cached_docs = list(getattr(cached, "docs", []) or [])
+    unaffected_docs: list[Document] = []
+    prev_source_docs: list[Document] = []
+    for doc in cached_docs:
+        meta = getattr(doc, "metadata", {}) or {}
+        if str(meta.get("source_file", "")).strip() == source_file:
+            prev_source_docs.append(doc)
+        else:
+            unaffected_docs.append(doc)
+
+    prev_fingerprints = sorted(_doc_fingerprint(doc) for doc in prev_source_docs)
+    new_fingerprints = sorted(_doc_fingerprint(doc) for doc in clean_docs)
+    if prev_fingerprints == new_fingerprints:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "no_change",
+            "bm25_total_docs": len(cached_docs),
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": len(prev_source_docs),
+        }
+
+    merged_docs = unaffected_docs + clean_docs
+    preprocess_func = getattr(cached, "preprocess_func", None) or korean_custom_preprocess
+    k_value = int(getattr(cached, "k", 5) or 5)
+
+    rebuilt = BM25Retriever.from_documents(
+        merged_docs,
+        preprocess_func=preprocess_func,
+    )
+    rebuilt.k = k_value
+    _atomic_dump_bm25_cache(rebuilt)
+    CACHED_BM25_RETRIEVER = rebuilt
+
+    return {
+        "bm25_cache_updated": True,
+        "bm25_status": "updated",
+        "bm25_total_docs": len(merged_docs),
+        "bm25_source_docs": len(clean_docs),
+        "bm25_prev_source_docs": len(prev_source_docs),
+    }
+
 
 def get_hybrid_retriever(
     query: str = "",
