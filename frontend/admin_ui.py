@@ -104,6 +104,16 @@ def show_admin_page():
                             st.write(f"**Vector Chunks Inserted:** `{data.get('db_chunks_inserted', 0)}`")
                             st.write(f"**Chunks Skipped (Already Indexed):** `{data.get('db_chunks_skipped', 0)}`")
                             st.write(f"**Stale Chunks Deleted:** `{data.get('db_chunks_deleted', 0)}`")
+                            if data.get("bm25_status") is not None:
+                                st.write(f"**BM25 Cache Status:** `{data.get('bm25_status')}`")
+                            if data.get("bm25_cache_updated") is not None:
+                                st.write(f"**BM25 Cache Updated:** `{data.get('bm25_cache_updated')}`")
+                            if data.get("bm25_total_docs") is not None:
+                                st.write(f"**BM25 Total Docs (Cache):** `{data.get('bm25_total_docs')}`")
+                            if data.get("bm25_source_docs") is not None:
+                                st.write(f"**BM25 Docs for Uploaded File:** `{data.get('bm25_source_docs')}`")
+                            if data.get("bm25_prev_source_docs") is not None:
+                                st.write(f"**BM25 Previous Docs Replaced:** `{data.get('bm25_prev_source_docs')}`")
                             if data.get("file_hash"):
                                 st.caption(f"file_hash: {data['file_hash']}")
                         else:
