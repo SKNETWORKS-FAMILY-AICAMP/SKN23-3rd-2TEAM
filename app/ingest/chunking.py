@@ -69,7 +69,17 @@ def chunk_markdown_document(content: str, source_path: str = "unknown.md") -> Li
         chapter_path = " > ".join(chapter_parts) if chapter_parts else "전체"
         
         # 문서 조각에 스마트 메타데이터 덮어쓰기
-        new_meta = {**base_metadata, "chapter_path": chapter_path}
+        new_meta = {
+            **base_metadata,
+            "chapter_path": chapter_path,
+        }
+        # Preserve heading fields so cmetadata can match legacy shape
+        if "Header 1" in doc.metadata:
+            new_meta["Header 1"] = doc.metadata["Header 1"]
+        if "Header 2" in doc.metadata:
+            new_meta["Header 2"] = doc.metadata["Header 2"]
+        if "Header 3" in doc.metadata:
+            new_meta["Header 3"] = doc.metadata["Header 3"]
         doc.metadata = new_meta
 
     # [2차 분할] 재귀적 글자수 기반 청킹 적용

@@ -47,7 +47,8 @@ dependencies = [
     "httpx (>=0.28.1,<0.29.0)",
     "itsdangerous (>=2.2.0,<3.0.0)",
     "boto3 (>=1.42.57,<2.0.0)",
-    "sseclient-py (>=1.9.0,<2.0.0)"
+    "sseclient-py (>=1.9.0,<2.0.0)",
+    "pypdf (>=6.7.3,<7.0.0)"
 ]
 
 [build-system]
