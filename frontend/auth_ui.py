@@ -9,6 +9,13 @@ def show_auth_page(api, API_URL):
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
 
+    # Already logged-in users should not see the login form again.
+    if st.session_state.get("authenticated") and st.session_state.get("access_token"):
+        user = st.session_state.get("user") or {}
+        st.success(f"관리자: {user.get('username', 'unknown')}")
+        st.info("왼쪽/상단의 이동 버튼으로 Chat UI로 돌아가세요.")
+        return
+
     # If a cached token exists, validate it and immediately return to the main app route.
     cached_token = st.session_state.get("access_token")
     if cached_token and not st.session_state.get("authenticated"):

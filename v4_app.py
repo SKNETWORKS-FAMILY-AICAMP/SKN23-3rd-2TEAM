@@ -34,6 +34,8 @@ if "api_session" not in st.session_state:
     st.session_state.api_session = requests.Session()
 if "access_token" not in st.session_state:
     st.session_state.access_token = None
+if "nav_selection" not in st.session_state:
+    st.session_state.nav_selection = "Chatbot"
 
 api = st.session_state.api_session
 
@@ -80,7 +82,14 @@ else:
         if user.get("role") == "admin":
             menu_options.append("Admin Dashboard")
 
-        selection = st.radio("Navigation", menu_options)
+        if st.session_state.nav_selection not in menu_options:
+            st.session_state.nav_selection = "Chatbot"
+        selection = st.radio(
+            "Navigation",
+            menu_options,
+            index=menu_options.index(st.session_state.nav_selection),
+        )
+        st.session_state.nav_selection = selection
 
         st.divider()
         if st.button("Logout", use_container_width=True):

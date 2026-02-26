@@ -44,9 +44,13 @@ def show_chat_page():
     st.title("🤖 WELD·BOT 산업 안전 어시스턴트")
     
     # 상단 정보 표시 (세션에서 유저 ID와 권한 가져오기)
-    user_id = st.session_state.get('user_id', 'Unknown')
-    role = st.session_state.get('role', 'user')
+    user = st.session_state.get("user") or {}
+    user_id = user.get("username", "Unknown")
+    role = user.get("role", "user")
     st.caption(f"🟢 접속자: **{user_id}** | 권한: **{role}**")
+    if role == "admin" and st.button("Admin UI로 이동", type="secondary"):
+        st.session_state.nav_selection = "Admin Dashboard"
+        st.rerun()
     st.divider()
     
     # 1. 대화 기록 초기화
