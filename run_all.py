@@ -8,22 +8,47 @@ def cleanup_ports():
     """Kills lingering processes on known ports before startup."""
     print("🧹 Cleaning up old processes (Ports 8000, 8501, 8502, 15432)...")
     try:
-        # Kill by process name
-        subprocess.run(["pkill", "-f", "uvicorn"], stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "streamlit"], stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "run_tunnel.py"], stderr=subprocess.DEVNULL)
-        subprocess.run(["pkill", "-f", "python3 run_all.py"], stderr=subprocess.DEVNULL)
-        
-        # Kill by port
-        for port in [8000, 8501, 8502, 15432]:
-            try:
-                result = subprocess.run(["lsof", "-t", f"-i:{port}"], capture_output=True, text=True)
-                pids = result.stdout.strip().split()
-                for pid in pids:
-                    if pid:
-                        subprocess.run(["kill", "-9", pid], stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+        if os.name == "nt":
+            target_ports = {8000, 8501, 8502, 15432}
+            netstat = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            killed_pids = set()
+            for line in netstat.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                if parts[0].upper() not in {"TCP", "UDP"}:
+                    continue
+                try:
+                    local_port = int(parts[1].rsplit(":", 1)[-1])
+                except ValueError:
+                    continue
+                pid = parts[-1]
+                if local_port in target_ports and pid.isdigit() and pid not in killed_pids:
+                    subprocess.run(["taskkill", "/PID", pid, "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    killed_pids.add(pid)
+        else:
+            # Kill by process name
+            subprocess.run(["pkill", "-f", "uvicorn"], stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-f", "streamlit"], stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-f", "run_tunnel.py"], stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-f", "python3 run_all.py"], stderr=subprocess.DEVNULL)
+
+            # Kill by port
+            for port in [8000, 8501, 8502, 15432]:
+                try:
+                    result = subprocess.run(["lsof", "-t", f"-i:{port}"], capture_output=True, text=True)
+                    pids = result.stdout.strip().split()
+                    for pid in pids:
+                        if pid:
+                            subprocess.run(["kill", "-9", pid], stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
         time.sleep(2)  # Give ports time to be released globally
     except Exception as e:
         print(f"⚠️ Cleanup error: {e}")

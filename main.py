@@ -235,7 +235,9 @@ async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, 
                     print(f"⚠️ [History] DB 저장 실패: {history_err}")
                 
     except Exception as e:
-        print(f"❌ [Error] SSE Failed: {e}")
+        import traceback
+        print(f"❌ [Error] SSE Failed: {e!r}")
+        traceback.print_exc()
         yield f"data: {json.dumps({'type': 'error', 'content': f'Engine Error: {str(e)}'})}\n\n"
 
 @app.post("/chat")
