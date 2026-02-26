@@ -50,9 +50,9 @@ def run_all():
     time.sleep(2) # Give tunnel time to establish
 
     # 1. Start FastAPI Backend (main.py)
-    print("\n📡 Starting FastAPI Backend (main:app)...")
+    print("\n📡 Starting FastAPI Backend (main.py)...")
     backend_proc = subprocess.Popen(
-        ["poetry", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+        ["poetry", "run", "python", "main.py"],
         cwd=str(root_dir)
     )
 

@@ -262,4 +262,5 @@ def health():
     return {"status": "ok", "device": DEVICE}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Windows에서 Psycopg3 비동기 루프 지원을 위해 reload=False 로 설정해야 자식 프로세스 재생성에 따른 루프 초기화 버그를 막을 수 있습니다.
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
