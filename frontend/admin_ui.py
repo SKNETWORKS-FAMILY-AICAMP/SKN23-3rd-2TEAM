@@ -80,9 +80,7 @@ def show_admin_page():
                     import requests
                     
                     # session_state 에서 토큰 추출
-                    token = st.session_state.api_session.cookies.get("weld_auth_token")
-                    if not token and "weld_auth_token" in st.context.cookies:
-                         token = st.context.cookies["weld_auth_token"]
+                    token = st.session_state.get("access_token")
                          
                     headers = {"Authorization": f"Bearer {token}"} if token else {}
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
