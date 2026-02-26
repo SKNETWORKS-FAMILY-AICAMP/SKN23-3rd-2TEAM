@@ -78,6 +78,10 @@ def show_admin_page():
                     if not token and "weld_auth_token" in st.context.cookies:
                         token = st.context.cookies["weld_auth_token"]
 
+                    
+                    # session_state 에서 토큰 추출
+                    token = st.session_state.get("access_token")
+                         
                     headers = {"Authorization": f"Bearer {token}"} if token else {}
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
 

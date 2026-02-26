@@ -170,27 +170,28 @@ async def login(response: Response, username: str = Form(...), password: str = F
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
-    
+
     access_token = create_access_token(
         data={"sub": user["username"], "id": user["id"], "role": user["role"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    
+
     set_auth_cookie(response, access_token)
-    
+
     return {
         "message": "Login successful",
         "user": {
             "id": user["id"],
             "username": user["username"],
             "role": user["role"]
-        }
+        },
+        "weld_auth_token": access_token,
     }
 
 @router.post("/signup")
 async def signup(username: str = Form(...), password: str = Form(...), admin_code: Optional[str] = Form(None)):
     from app.core.config import ADMIN_SECRET_KEY
-    
+
     role = "user"
     if admin_code and admin_code == ADMIN_SECRET_KEY:
         role = "admin"
@@ -200,7 +201,7 @@ async def signup(username: str = Form(...), password: str = Form(...), admin_cod
             cur.execute("SELECT 1 FROM users WHERE username = %s", (username,))
             if cur.fetchone():
                 raise HTTPException(status_code=400, detail="Username already exists")
-            
+
             cur.execute(
                 "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
                 (username, hash_password(password), role)
@@ -218,7 +219,7 @@ async def get_me(request: Request, weld_auth_token: Optional[str] = Cookie(None)
     token = weld_auth_token or request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return {
@@ -273,7 +274,7 @@ async def oauth_callback(provider: str, request: Request):
     auth_code = issue_oauth_exchange_code(internal_username)
     sep = "&" if "?" in frontend_redirect_uri else "?"
     redirect_url = f"{frontend_redirect_uri}{sep}auth_code={auth_code}"
-    
+
     return RedirectResponse(url=redirect_url)
 
 @router.post("/oauth/exchange")
@@ -282,12 +283,12 @@ async def oauth_exchange(response: Response, code: str = Form(...)):
     user = db_get_oauth_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
+
     access_token = create_access_token(
         data={"sub": user["username"], "id": user["id"], "role": user["role"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    
+
     set_auth_cookie(response, access_token)
     return {
         "message": "oauth exchange success",
