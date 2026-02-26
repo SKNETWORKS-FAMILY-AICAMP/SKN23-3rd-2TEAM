@@ -21,13 +21,13 @@ CACHED_BM25_RETRIEVER = None
 
 def korean_custom_preprocess(text: str) -> List[str]:
     """
-    [?곕떽??? ??? 鈺곌퀣沅?獄??諭?붹묾怨좎깈嚥??紐낅퉸 ?怨몃선/??ъ쁽 ?癒?쑎?꾨뗀諭뜹첎? 筌띲끉臾??? ??낅뮉 ?袁⑷맒 獄쎻뫗?
-    ?? "M0042揶쎛" -> "M0042 揶쎛" 嚥??브쑬???????덈즲嚥??諭?붹묾怨좎깈 ?類ㅼ젫 ???袁⑸선?怨뚮┛ 疫꿸퀣? ?브쑬??
+    [異붽??? ?쒓? 議곗궗 諛??뱀닔湲고샇濡??명빐 ?곸뼱/?レ옄 ?먮윭肄붾뱶媛 留ㅼ묶?섏? ?딅뒗 ?꾩긽 諛⑹?
+    ?? "M0042媛" -> "M0042 媛" 濡?遺꾨━?????덈룄濡??뱀닔湲고샇 ?뺤젣 ???꾩뼱?곌린 湲곗? 遺꾨━
     """
     if not isinstance(text, str):
         return []
-    # ???, ?怨론? ??ъ쁽????뽰뇚??筌뤴뫀諭??諭?붹묾怨좎깈???⑤벉媛??곗쨮 燁살꼹??
-    text = re.sub(r'[^\\uac00-\\ud7a3A-Za-z0-9]', ' ', text)
+    # ?쒓?, ?곷Ц, ?レ옄瑜??쒖쇅??紐⑤뱺 ?뱀닔湲고샇瑜?怨듬갚?쇰줈 移섑솚
+    text = re.sub(r'[^媛-?쥱-Za-z0-9]', ' ', text)
     return text.split()
 
 
@@ -59,7 +59,7 @@ def _load_cached_bm25_from_memory_or_file() -> BM25Retriever | None:
 
 def _load_or_create_bm25_retriever(vector_store):
     """
-    BM25 ?귐뗫뱜?귐됱쒔??筌롫뗀?덄뵳?Singleton) -> 筌?Ŋ?????뵬 -> RDS ??뽰몵嚥?嚥≪뮆諭??몃빍??
+    BM25 由ы듃由щ쾭瑜?硫붾え由?Singleton) -> 罹먯떆 ?뚯씪 -> RDS ?쒖쑝濡?濡쒕뱶?⑸땲??
     """
     global CACHED_BM25_RETRIEVER
     
@@ -70,38 +70,38 @@ def _load_or_create_bm25_retriever(vector_store):
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     if BM25_CACHE_PATH.exists():
-        print(f"[BM25] Loading cache from file: {BM25_CACHE_PATH}")
+        print(f"?벀 BM25 ?몃뜳??罹먯떆 濡쒕뱶 以?(File): {BM25_CACHE_PATH}")
         with open(BM25_CACHE_PATH, "rb") as f:
             CACHED_BM25_RETRIEVER = pickle.load(f)
             return CACHED_BM25_RETRIEVER
     
-    print("[BM25] Cache not found. Building index from RDS documents...")
+    print("?좑툘 BM25 罹먯떆媛 ?놁뒿?덈떎. RDS?먯꽌 紐⑤뱺 臾몄꽌瑜?濡쒕뱶?섏뿬 ?몃뜳?ㅻ? ?앹꽦?⑸땲??")
     start_time = time.time()
     
     try:
-        # RDS?癒?퐣 筌뤴뫀諭??얜챷苑?揶쎛?紐꾩궎疫?(?袁⑥쎗 嚥≪뮆諭?
-        # 雅뚯눘?? ???얜챷???野꺜??깆뵠 ??? ?袁⑥퓢??筌뤴뫀??癒?퐣 ?븍뜆釉?類λ막 野껋럩??vector_store.get() ????뽰뒠 亦낅슣??
+        # RDS?먯꽌 紐⑤뱺 臾몄꽌 媛?몄삤湲?(?꾨웾 濡쒕뱶)
+        # 二쇱쓽: 鍮?臾몄옄??寃?됱씠 ?쇰? ?꾨쿋??紐⑤뜽?먯꽌 遺덉븞?뺥븷 寃쎌슦 vector_store.get() ???쒖슜 沅뚯옣
         all_docs = vector_store.similarity_search("", k=100000)
-        print(f"[BM25] Loaded {len(all_docs)} docs. Building index...")
+        print(f"?뱷 {len(all_docs)}媛쒖쓽 臾몄꽌瑜?濡쒕뱶?덉뒿?덈떎. BM25 ?몃뜳???쒖옉...")
         
-        # [??륁젟?? ?뚣끉??? ?袁⑹퓗????λ땾(korean_custom_preprocess) ?怨몄뒠
+        # [?섏젙?? 而ㅼ뒪? ?꾩쿂由??⑥닔(korean_custom_preprocess) ?곸슜
         bm25_retriever = BM25Retriever.from_documents(
             all_docs,
             preprocess_func=korean_custom_preprocess
         )
         bm25_retriever.k = 5
         
-        # 筌?Ŋ???????
+        # 罹먯떆?????
         with open(BM25_CACHE_PATH, "wb") as f:
             pickle.dump(bm25_retriever, f)
             
         CACHED_BM25_RETRIEVER = bm25_retriever
         end_time = time.time()
-        print(f"[BM25] Index build + cache save complete ({end_time - start_time:.2f}s)")
+        print(f"??BM25 ?몃뜳???앹꽦 諛?罹먯떆 ????꾨즺 ({end_time - start_time:.2f}珥??뚯슂)")
         return CACHED_BM25_RETRIEVER
         
     except Exception as e:
-        print(f"[BM25] Index build failed: {e}")
+        print(f"??BM25 ?몃뜳???앹꽦 ?ㅽ뙣: {e}")
         raise e
 
 def update_bm25_cache_for_uploaded_source(
@@ -206,17 +206,17 @@ def get_hybrid_retriever(
     collection_name: str = COLLECTION_NAME, 
     vector_weight: float = None, 
     bm25_weight: float = None,
-    k: int = 5  # default per-retriever candidate count
+    k: int = 3  # default per-retriever candidate count
 ):
     """
-    Vector Search (RDS)?? BM25 (Local Cache)??野껉퀬鍮????륁뵠?됰슢????귐뗫뱜?귐됱쒔??獄쏆꼹???몃빍??
-    筌욌뜄揆??疫꿸퀣????밸선(?癒?쑎?꾨뗀諭? 筌뤴뫀?쏙쭗? ??釉???BM25 揶쎛餓λ쵐?귞몴???덉읅??곗쨮 ?怨밸샨??몃빍??
+    Vector Search (RDS)? BM25 (Local Cache)瑜?寃고빀???섏씠釉뚮━??由ы듃由щ쾭瑜?諛섑솚?⑸땲??
+    吏덈Ц??湲곗닠 ?⑹뼱(?먮윭肄붾뱶, 紐⑤뜽紐? ?ы븿 ??BM25 媛以묒튂瑜??숈쟻?쇰줈 ?곹뼢?⑸땲??
     """
-    # 0. ??덉읅 揶쎛餓λ쵐??野껉퀣??
-    # [??륁젟?? ?袁⑥뵭??뤿?????쇱뜖???곕떽? (TP630, RB10 ??
+    # 0. ?숈쟻 媛以묒튂 寃곗젙
+    # [?섏젙?? ?꾨씫?섏뿀???ㅼ썙??異붽? (TP630, RB10 ??
     tech_keywords = ["HH", "HI5", "HI6", "UR10", "UR5", "UR3", "DX100", "YRC1000", "TP630", "RB10"]
     
-    # [??륁젟?? ??곕솁甕???ъ쁽 鈺곌퀬鍮(?? Hi5, M0042) ?癒?뮉 4?癒?봺 ??곴맒???怨쀫꺗????ъ쁽(?? 4107, 38013) 揶쏅Ŋ?
+    # [?섏젙?? ?뚰뙆踰??レ옄 議고빀(?? Hi5, M0042) ?먮뒗 4?먮━ ?댁긽???곗냽???レ옄(?? 4107, 38013) 媛먯?
     regex_pattern = r'[A-Za-z]+\d+|\d{4,}'
     
     is_technical = any(kw in query.upper() for kw in tech_keywords) or bool(re.search(regex_pattern, query))
@@ -227,24 +227,24 @@ def get_hybrid_retriever(
         vector_weight = (1.0 - bm25_weight)
         
     if is_technical:
-        print(f"[Retriever] Technical query detected -> increase BM25 weight ({bm25_weight})")
+        print(f"?뵇 湲곗닠 ?⑹뼱 媛먯?????BM25 媛以묒튂 ?곹뼢 ({bm25_weight})")
     
-    print("[Retriever] Initializing hybrid retriever...")
+    print("?? ?섏씠釉뚮━??由ы듃由щ쾭 珥덇린??以?..")
     
-    # 1. 甕겸돧苑??귐뗫뱜?귐됱쒔 ??쇱젟 (RDS pgvector)
+    # 1. 踰≫꽣 由ы듃由щ쾭 ?ㅼ젙 (RDS pgvector)
     from app.vectorstore.pgvector_store import get_vector_store
     vector_store = get_vector_store(collection_name=collection_name)
     vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
 
-    # 2. BM25 ?귐뗫뱜?귐됱쒔 ??쇱젟
+    # 2. BM25 由ы듃由щ쾭 ?ㅼ젙
     bm25_retriever = _load_or_create_bm25_retriever(vector_store)
     bm25_retriever.k = k
 
-    # 3. ??덇맒???귐뗫뱜?귐됱쒔 ?닌딄쉐
+    # 3. ?숈긽釉?由ы듃由щ쾭 援ъ꽦
     ensemble_retriever = EnsembleRetriever(
         retrievers=[vector_retriever, bm25_retriever],
         weights=[vector_weight, bm25_weight]
     )
     
-    print(f"[Retriever] Hybrid retriever ready (weights: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
+    print(f"???섏씠釉뚮━??由ы듃由щ쾭 以鍮??꾨즺 (媛以묒튂: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
     return ensemble_retriever
