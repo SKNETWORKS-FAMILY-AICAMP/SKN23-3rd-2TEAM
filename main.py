@@ -12,6 +12,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
 
+# [V4.0] Cross-Platform Asyncio Policy (Windows)
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # 1. 🚀 PYTHONPATH & ROOT_DIR 고정
 # 최상위 루트 main.py 위치를 기준으로 경로 보정
 ROOT_DIR = Path(__file__).resolve().parent
@@ -23,9 +27,19 @@ from app.agents.graph import compile_workflow
 from app.core.history import get_async_postgres_saver
 from app.vectorstore.pgvector_store import PGVectorStoreManager, get_vector_store
 from app.rag.reranker import load_reranker_singleton
+from app.api.auth_api import router as auth_router, setup_auth_middleware
+from app.api.routes.admin import router as admin_router
 from langchain_core.messages import HumanMessage
 
-app = FastAPI(title="Industrial RAG All-in-One Backend (v3.0 - Ready)", version="3.1.0")
+app = FastAPI(title="Industrial RAG All-in-One Backend (v4.0 - Auth Integrated)", version="4.0.0")
+
+# Set up Session middleware for authentication (OAuth)
+setup_auth_middleware(app)
+
+# [V4.0] Auth Router Inclusion
+app.include_router(auth_router)
+# [V4.0] Admin Router Inclusion
+app.include_router(admin_router)
 
 # ── [Global State] ────────────────────────────
 GLOBAL_BM25_RETRIEVER = None

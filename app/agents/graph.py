@@ -90,7 +90,7 @@ workflow.add_node("electrical",         electrical_node)
 workflow.add_node("general",            general_node)
 workflow.add_node("social",             social_node)
 workflow.add_node("verifier",           verifier_node)
-workflow.add_node("feedback_rewriter",  feedback_rewriter_node)
+workflow.add_node("feedback_rewriter",  feedback_rewriter_node, )
 workflow.add_node("fallback",           fallback_node)
 workflow.add_node("supervisor_reroute", reroute_supervisor_node)
 
