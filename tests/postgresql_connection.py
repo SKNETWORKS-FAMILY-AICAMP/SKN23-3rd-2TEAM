@@ -1,4 +1,4 @@
-﻿import os
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,13 +29,19 @@ def load_env_file(env_path: Path) -> None:
             os.environ[key] = value
 
 def get_connection_kwargs() -> dict[str, object]:
-    # (팀원분 코드 원본 유지) DB 접속 정보 파싱
+    for key in ["DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGVECTOR_DATABASE_URL"]:
+        value = os.getenv(key)
+        if value:
+            return {"conninfo": value}
+
     alias_map = {
         "host": ["PGHOST", "POSTGRES_HOST", "DB_HOST"],
         "port": ["PGPORT", "POSTGRES_PORT", "DB_PORT"],
         "dbname": ["PGDATABASE", "POSTGRES_DB", "DB_NAME", "DATABASE_NAME"],
         "user": ["PGUSER", "POSTGRES_USER", "DB_USER", "DATABASE_USER"],
         "password": ["PGPASSWORD", "POSTGRES_PASSWORD", "DB_PASSWORD", "DATABASE_PASSWORD"],
+        "sslmode": ["PGSSLMODE", "POSTGRES_SSLMODE", "DB_SSLMODE"],
+        "connect_timeout": ["PGCONNECT_TIMEOUT", "POSTGRES_CONNECT_TIMEOUT", "DB_CONNECT_TIMEOUT"],
     }
 
     kwargs: dict[str, object] = {}
@@ -43,20 +49,29 @@ def get_connection_kwargs() -> dict[str, object]:
         for alias in aliases:
             value = os.getenv(alias)
             if value:
-                kwargs[target_key] = int(value) if target_key == "port" else value
+                kwargs[target_key] = int(value) if target_key in {"port", "connect_timeout"} else value
                 break
 
     required = ("host", "dbname", "user", "password")
     if all(k in kwargs and kwargs[k] for k in required):
         return kwargs
 
-    raise RuntimeError("PostgreSQL connection info not found in .env")
+    raise RuntimeError("PostgreSQL connection info not found.")
 
 def get_db_host_port_for_tunnel() -> tuple[str, int]:
     host = env_first("PGHOST", "POSTGRES_HOST", "DB_HOST")
     port_raw = env_first("PGPORT", "POSTGRES_PORT", "DB_PORT")
     if host:
         return host, int(port_raw) if port_raw else 5432
+
+    for key in ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGVECTOR_DATABASE_URL"):
+        value = os.getenv(key)
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        if parsed.hostname:
+            return parsed.hostname, parsed.port or 5432
+
     raise RuntimeError("Cannot determine DB host/port for SSH tunnel.")
 
 def get_ssh_tunnel_config():
@@ -66,12 +81,17 @@ def get_ssh_tunnel_config():
         return None
 
     ssh_user = env_first("SSH_USER", "BASTION_USER", "SSH_TUNNEL_USER")
+    if not ssh_host or not ssh_user:
+        raise RuntimeError("SSH tunnel enabled but SSH_HOST/SSH_USER missing.")
+
     remote_host, remote_port = get_db_host_port_for_tunnel()
     return {
         "ssh_host": ssh_host,
         "ssh_port": int(env_first("SSH_PORT", "BASTION_PORT", "SSH_TUNNEL_PORT") or "22"),
         "ssh_user": ssh_user,
         "ssh_key_path": env_first("SSH_PRIVATE_KEY_PATH", "SSH_KEY_PATH", "BASTION_KEY_PATH"),
+        "ssh_password": env_first("SSH_PASSWORD", "BASTION_PASSWORD"),
+        "ssh_key_passphrase": env_first("SSH_PRIVATE_KEY_PASSPHRASE", "SSH_KEY_PASSPHRASE", "BASTION_KEY_PASSPHRASE"),
         "local_bind_port": int(env_first("SSH_LOCAL_BIND_PORT")) if env_first("SSH_LOCAL_BIND_PORT") else None,
         "remote_host": env_first("SSH_REMOTE_BIND_HOST") or remote_host,
         "remote_port": int(env_first("SSH_REMOTE_BIND_PORT") or str(remote_port)),
@@ -86,7 +106,7 @@ def open_optional_ssh_tunnel():
 
     import paramiko
     if not hasattr(paramiko, "DSSKey"):
-        paramiko.DSSKey = paramiko.RSAKey
+        paramiko.DSSKey = paramiko.RSAKey  # sshtunnel ?筌뤿굞??
     from sshtunnel import SSHTunnelForwarder
 
     kwargs = {
@@ -94,40 +114,39 @@ def open_optional_ssh_tunnel():
         "ssh_username": cfg["ssh_user"],
         "remote_bind_address": (cfg["remote_host"], cfg["remote_port"]),
         "set_keepalive": 30.0,
+        "mute_exceptions": False,
+        "allow_agent": parse_bool(env_first("SSH_ALLOW_AGENT"), default=False),
+        "host_pkey_directories": [],
     }
     if cfg["local_bind_port"]:
         kwargs["local_bind_address"] = ("127.0.0.1", cfg["local_bind_port"])
     if cfg["ssh_key_path"]:
         kwargs["ssh_pkey"] = str(Path(str(cfg["ssh_key_path"])).expanduser())
+    if cfg["ssh_password"]:
+        kwargs["ssh_password"] = cfg["ssh_password"]
+    if cfg["ssh_key_passphrase"]:
+        kwargs["ssh_private_key_password"] = cfg["ssh_key_passphrase"]
 
     server = SSHTunnelForwarder(**kwargs)
     try:
         server.start()
-        print(f"🔒 SSH Tunnel opened at 127.0.0.1:{server.local_bind_port}")
         yield {"forward_host": "127.0.0.1", "forward_port": int(server.local_bind_port)}
     finally:
         server.stop()
-        print("🔓 SSH Tunnel closed.")
 
-# 💡 [핵심] LangChain용 DB URL 생성기 추가
-@contextmanager
-def get_pgvector_url():
-    """SSH 터널을 열고 LangChain PGVector에 바로 넣을 수 있는 URL을 반환합니다."""
-    # 환경변수 로드
-    load_env_file(Path(__file__).resolve().parent.parent.parent.parent / ".env")
-    
+def test_postgres_connection():
+    import psycopg2
+
     conn_kwargs = get_connection_kwargs()
-    
     with open_optional_ssh_tunnel() as tunnel:
-        # 터널이 뚫렸으면 로컬 호스트/포트를 쓰고, 아니면 원래 접속 정보 사용
-        host = tunnel["forward_host"] if tunnel else conn_kwargs["host"]
-        port = tunnel["forward_port"] if tunnel else conn_kwargs.get("port", 5432)
-        
-        user = conn_kwargs["user"]
-        password = conn_kwargs["password"]
-        dbname = conn_kwargs["dbname"]
-        
-        # LangChain + pgvector 연결용 SQLAlchemy 포맷 (psycopg 사용)
-        db_url = f"postgresql+psycopg://{user}:{password}@{host}:{port}/{dbname}"
-        
-        yield db_url
+        effective_conn_kwargs = dict(conn_kwargs)
+        if tunnel:
+            effective_conn_kwargs["host"] = tunnel["forward_host"]
+            effective_conn_kwargs["port"] = tunnel["forward_port"]
+
+        with psycopg2.connect(**effective_conn_kwargs) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                return cur.fetchone()[0]
+
+
