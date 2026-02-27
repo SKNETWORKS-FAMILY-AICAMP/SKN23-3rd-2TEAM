@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import pickle
 import asyncio
@@ -16,12 +16,12 @@ import uvicorn
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# 1. ?? PYTHONPATH & ROOT_DIR 怨좎젙
-# 理쒖긽??猷⑦듃 main.py ?꾩튂瑜?湲곗??쇰줈 寃쎈줈 蹂댁젙
+# 1. 🚀 PYTHONPATH & ROOT_DIR 고정
+# 최상위 루트 main.py 위치를 기준으로 경로 보정
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(ROOT_DIR))
 
-# app ?⑦궎吏 ?꾪룷??
+# app 패키지 임포트
 from app.core.config import validate_config, ADMIN_SECRET_KEY, CACHE_DIR, DATA_DIR, get_device
 from app.agents.graph import compile_workflow
 from app.core.history import get_async_postgres_saver
@@ -41,38 +41,38 @@ app.include_router(auth_router)
 # [V4.0] Admin Router Inclusion
 app.include_router(admin_router)
 
-# ?? [Global State] ????????????????????????????
+# ── [Global State] ────────────────────────────
 GLOBAL_BM25_RETRIEVER = None
 BM25_CACHE_PATH = CACHE_DIR / "bm25_retriever.pkl"
 DEVICE = "cpu"
 
 async def debug_system():
-    """?쒕쾭 ?쒖옉 ??二쇱슂 而댄룷?뚰듃瑜??먭??⑸땲??"""
+    """서버 시작 전 주요 컴포넌트를 점검합니다."""
     print("\n" + "="*50)
-    print("?뵇 [System Debug] Starting Production Check...")
+    print("🔍 [System Debug] Starting Production Check...")
     
-    # 1. ?섍꼍 蹂??泥댄겕
+    # 1. 환경 변수 체크
     is_valid, err = validate_config()
     if not is_valid:
-        print(f"??[Config] Failed: {err}")
+        print(f"❌ [Config] Failed: {err}")
         sys.exit(1)
-    print("??[Config] Mandatory Env Vars Found.")
+    print("✅ [Config] Mandatory Env Vars Found.")
 
-    # 2. ?섎뱶?⑥뼱 媛??泥댄겕
+    # 2. 하드웨어 가속 체크
     global DEVICE
     DEVICE = get_device()
-    print(f"??[Hardware] Using Device: {DEVICE}")
+    print(f"✅ [Hardware] Using Device: {DEVICE}")
 
-    # 3. RDS & Vector Store 泥댄겕 (Dry Run)
+    # 3. RDS & Vector Store 체크 (Dry Run)
     try:
         with PGVectorStoreManager() as _:
             vector_store = get_vector_store()
-            # 媛꾨떒??寃???뚯뒪??(理쒖냼 1嫄?
-            test_res = await asyncio.wait_for(asyncio.to_thread(lambda: vector_store.similarity_search("test", k=1)), timeout=12)
-            print(f"??[RDS/pgvector] Connection OK. Found {len(test_res)} docs in test.")
+            # 간단한 검색 테스트 (최소 1건)
+            test_res = vector_store.similarity_search("안전", k=1)
+            print(f"✅ [RDS/pgvector] Connection OK. Found {len(test_res)} docs in test.")
     except Exception as e:
-        print(f"??[RDS/pgvector] Connection Failed: {e}")
-        # ?곸슜援ъ텞?대?濡??ㅽ뙣 ??寃쎄퀬留??섍퀬 吏꾪뻾?좎? 以묐떒?좎? 寃곗젙 (?ш린??以묐떒 沅뚯옣)
+        print(f"❌ [RDS/pgvector] Connection Failed: {e}")
+        # 상용구축이므로 실패 시 경고만 하고 진행할지 중단할지 결정 (여기선 중단 권장)
         # sys.exit(1)
 
     print("="*50 + "\n")
@@ -80,33 +80,33 @@ async def debug_system():
 def load_global_bm25():
     global GLOBAL_BM25_RETRIEVER
     if BM25_CACHE_PATH.exists():
-        print(f"?벀 [Startup] Loading BM25 Index (94k docs)...")
+        print(f"📦 [Startup] Loading BM25 Index (94k docs)...")
         with open(BM25_CACHE_PATH, "rb") as f:
             GLOBAL_BM25_RETRIEVER = pickle.load(f)
-        print("??[Startup] Global BM25 Loaded.")
+        print("✅ [Startup] Global BM25 Loaded.")
     else:
-        print("?좑툘 [Startup] BM25 Cache not found. Initial query will be slow.")
+        print("⚠️ [Startup] BM25 Cache not found. Initial query will be slow.")
 
 @app.on_event("startup")
 async def startup_event():
-    print("\n" + "??" + "?"*48)
-    print("?뙇 [System] Initializing All-in-One Backend Engine...")
+    print("\n" + "🚀" + "─"*48)
+    print("🌍 [System] Initializing All-in-One Backend Engine...")
     
     await debug_system()
     load_global_bm25()
-    load_reranker_singleton() # [V3.1] 由щ옲而??깃???GPU 怨좎젙 濡쒕뱶
+    load_reranker_singleton() # [V3.1] 리랭커 싱글톤 GPU 고정 로드
     
-    # [V3.1] 理쒖쥌 ?붿빟 由ы룷??(Visual Feedback)
-    print("\n" + "?뢾" + "?"*48)
-    print("?뭿 [Final Status Report]")
-    bm25_status = "??Loaded (94k docs)" if GLOBAL_BM25_RETRIEVER else "?좑툘 Not Found (Cache required)"
-    print(f"  {bm25_status} [BM25 濡쒕뱶 ?꾨즺]")
-    print(f"  ??[?섎뱶?⑥뼱 媛???쒖꽦?? Enabled on {DEVICE.upper()}")
-    print(f"  ??[RDS ?곌껐 ?깃났]       PostgreSQL & pgvector Ready")
-    print("?뭿 " + "?"*50 + "\n")
-    print(f"?? Integrated Backend Started: http://0.0.0.0:8000")
+    # [V3.1] 최종 요약 리포트 (Visual Feedback)
+    print("\n" + "🏁" + "─"*48)
+    print("💎 [Final Status Report]")
+    bm25_status = "✅ Loaded (94k docs)" if GLOBAL_BM25_RETRIEVER else "⚠️ Not Found (Cache required)"
+    print(f"  {bm25_status} [BM25 로드 완료]")
+    print(f"  ✅ [하드웨어 가속 활성화] Enabled on {DEVICE.upper()}")
+    print(f"  ✅ [RDS 연결 성공]       PostgreSQL & pgvector Ready")
+    print("💎 " + "─"*50 + "\n")
+    print(f"🚀 Integrated Backend Started: http://0.0.0.0:8000")
 
-# ?? [Schemas] ??????????????????????????????????
+# ── [Schemas] ──────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
     thread_id: str
@@ -114,63 +114,63 @@ class ChatRequest(BaseModel):
 class JargonUpdate(BaseModel):
     data: List[Dict[str, str]]
 
-# ?? [Chat & SSE] ???????????????????????????????
+# ── [Chat & SSE] ───────────────────────────────
 async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, None]:
     import time
     start_total = time.perf_counter()
-    node_timers = {} # ?몃뱶蹂??쒖옉 ?쒓컙 ??μ슜
+    node_timers = {} # 노드별 시작 시간 저장용
 
-    # [KEEP-ALIVE] ?곌껐 利됱떆 ?곹깭 硫붿떆吏瑜??꾩넚?섏뿬 ??꾩븘??諛⑹?
-    yield f"data: {json.dumps({'type': 'status', 'content': '?? Connection established. Initializing engine...'})}\n\n"
+    # [KEEP-ALIVE] 연결 즉시 상태 메시지를 전송하여 타임아웃 방지
+    yield f"data: {json.dumps({'type': 'status', 'content': '🚀 Connection established. Initializing engine...'})}\n\n"
     
-    print(f"\n?뮠 [Chat] New Request: '{request_data.message}' (Thread: {request_data.thread_id})")
-    print(f"?숋툘 [Device] Running on: {DEVICE} | Model: gpt-4o")
+    print(f"\n💬 [Chat] New Request: '{request_data.message}' (Thread: {request_data.thread_id})")
+    print(f"⚙️ [Device] Running on: {DEVICE} | Model: gpt-4o")
     
     try:
-        # [DEBUG] ?붿쭊 珥덇린??怨쇱젙 濡쒓렇
-        print("  ???뵩 Initializing LangGraph & RDS Connection...")
+        # [DEBUG] 엔진 초기화 과정 로그
+        print("  ↳ 🔧 Initializing LangGraph & RDS Connection...")
         with PGVectorStoreManager() as _:
             async with get_async_postgres_saver() as saver:
                 graph = compile_workflow(saver)
                 config = {"configurable": {"thread_id": request_data.thread_id}}
                 inputs = {"messages": [HumanMessage(content=request_data.message)], "retry_count": 0}
                 
-                print("  ????Starting graph execution...")
+                print("  ↳ ⚡ Starting graph execution...")
                 async for event in graph.astream_events(inputs, config, version="v2"):
                     kind = event["event"]
                     node_name = event["metadata"].get("langgraph_node", "")
                     
-                    # [吏꾪뻾 ?곹깭 & ?쒖옉 ?쒓컙 痢≪젙]
+                    # [진행 상태 & 시작 시간 측정]
                     if kind == "on_node_start":
                         if node_name:
                             node_timers[node_name] = time.perf_counter()
-                            print(f"  ???봽 Node Start: {node_name.upper()}")
+                            print(f"  ↳ 🔄 Node Start: {node_name.upper()}")
                             yield f"data: {json.dumps({
                                 'type': 'status', 
                                 'content': f'{node_name.upper()} processing...',
                                 'node': node_name
                             })}\n\n"
                         
-                        # ?뱀젙 ?④퀎 濡쒓렇 而ㅼ뒪?곕쭏?댁쭠
+                        # 특정 단계 로그 커스터마이징
                         if node_name == "retriever":
-                            print("    ?뵇 [Step 1] Initial BM25 + Vector Search starting...")
+                            print("    🔍 [Step 1] Initial BM25 + Vector Search starting...")
                         elif node_name == "reranker":
                             print("    sort [Step 2] Reranking documents...")
                         elif node_name in ["welding", "robotics", "safety", "electrical", "general", "social"]:
-                            print(f"    ?쨼 [Step 3] Calling LLM ({node_name.upper()} Agent)...")
+                            print(f"    🤖 [Step 3] Calling LLM ({node_name.upper()} Agent)...")
 
-                    # [?듬? ?⑹뼱由?
+                    # [답변 덩어리]
                     if kind == "on_chain_stream":
                         chunk = event["data"]["chunk"]
                         if isinstance(chunk, dict) and "generated_answer" in chunk:
                             yield f"data: {json.dumps({'type': 'answer', 'content': chunk['generated_answer']})}\n\n"
                     
-                    # [?몃뱶 醫낅즺 & ?뚯슂 ?쒓컙 怨꾩궛]
+                    # [노드 종료 & 소요 시간 계산]
                     if kind == "on_node_end":
                         if node_name:
                             elapsed = time.perf_counter() - node_timers.get(node_name, time.perf_counter())
-                            print(f"  ????Node End: {node_name.upper()} ({elapsed:.2f}s)")
-                            # 醫낅즺 ?뺣낫? ?쒓컙??硫뷀??곗씠?곕줈 ?꾩넚
+                            print(f"  ↳ ✅ Node End: {node_name.upper()} ({elapsed:.2f}s)")
+                            # 종료 정보와 시간을 메타데이터로 전송
                             yield f"data: {json.dumps({
                                 'type': 'metadata', 
                                 'content': f'{node_name.upper()} completed',
@@ -181,13 +181,13 @@ async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, 
                         if node_name == "verifier":
                             output = event["data"].get("output")
                             if output and output.get("is_hallucinated"):
-                                print("    ?좑툘 [Warning] Hallucination suspected!")
+                                print("    ⚠️ [Warning] Hallucination suspected!")
                                 yield f"data: {json.dumps({'type': 'warning', 'content': 'Hallucination suspect - rewriting...'})}\n\n"
                 
                 total_elapsed = time.perf_counter() - start_total
                 
-                # [V3.1] RDS ?곴뎄 ??? 理쒖쥌 ?ㅽ뻾 ?듦퀎瑜?State Metadata??二쇱엯
-                # node_timers????λ맂 媛믪? ?쒖옉 ?쒓컙肉먯씠誘濡?elapsed瑜?怨꾩궛?댁빞 ??
+                # [V3.1] RDS 영구 저장: 최종 실행 통계를 State Metadata에 주입
+                # node_timers에 저장된 값은 시작 시간뿐이므로 elapsed를 계산해야 함
                 execution_metadata = {
                     "total_elapsed": round(total_elapsed, 2),
                     "device": DEVICE,
@@ -195,11 +195,11 @@ async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, 
                 }
                 await graph.aupdate_state(config, {"metadata": execution_metadata})
                 
-                print(f"?뮶 [Persistence] Session archived with metadata: {execution_metadata}")
-                yield f"data: {json.dumps({'type': 'status', 'content': f'??Finished in {total_elapsed:.2f}s'})}\n\n"
+                print(f"💾 [Persistence] Session archived with metadata: {execution_metadata}")
+                yield f"data: {json.dumps({'type': 'status', 'content': f'✅ Finished in {total_elapsed:.2f}s'})}\n\n"
                 
-                # [V3.3] chat_history ?뚯씠釉붿뿉 ?대젰 ???
-                print("?뱷 [History] Saving chat interaction to RDS...")
+                # [V3.3] chat_history 테이블에 이력 저장
+                print("📝 [History] Saving chat interaction to RDS...")
                 try:
                     import psycopg2
                     ssh_enabled = os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true"
@@ -215,28 +215,28 @@ async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, 
                         port=target_port
                     )
                     with conn.cursor() as cur:
-                        # 1. User Message ???
+                        # 1. User Message 저장
                         cur.execute(
                             "INSERT INTO chat_history (thread_id, username, role, content) VALUES (%s, %s, %s, %s)",
                             (request_data.thread_id, "default_user", "user", request_data.message)
                         )
-                        # 2. Assistant Message ???(理쒖쥌 ?듬? 異붿텧)
+                        # 2. Assistant Message 저장 (최종 답변 추출)
                         final_state = await graph.aget_state(config)
                         assistant_msg = final_state.values.get("generated_answer", "")
                         if assistant_msg:
                             cur.execute(
                                 "INSERT INTO chat_history (thread_id, username, role, content) VALUES (%s, %s, %s, %s)",
-                                (request_data.thread_id, "WELD쨌BOT", "assistant", assistant_msg)
+                                (request_data.thread_id, "WELD·BOT", "assistant", assistant_msg)
                             )
                     conn.commit()
                     conn.close()
-                    print("??[History] Chat interaction saved successfully.")
+                    print("✅ [History] Chat interaction saved successfully.")
                 except Exception as history_err:
-                    print(f"?좑툘 [History] DB ????ㅽ뙣: {history_err}")
+                    print(f"⚠️ [History] DB 저장 실패: {history_err}")
                 
     except Exception as e:
         import traceback
-        print(f"??[Error] SSE Failed: {e!r}")
+        print(f"❌ [Error] SSE Failed: {e!r}")
         traceback.print_exc()
         yield f"data: {json.dumps({'type': 'error', 'content': f'Engine Error: {str(e)}'})}\n\n"
 
@@ -244,7 +244,7 @@ async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, 
 async def chat_stream(request: ChatRequest):
     return StreamingResponse(sse_event_generator(request), media_type="text/event-stream")
 
-# ?? [History] ??????????????????????????????????
+# ── [History] ──────────────────────────────────
 @app.get("/history/{thread_id}")
 async def get_history(thread_id: str):
     try:
@@ -258,11 +258,11 @@ async def get_history(thread_id: str):
         raise HTTPException(status_code=500, detail=str(e))
     return []
 
-# [Admin Utilities] ?????????????????????????
+# [Admin Utilities] ─────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok", "device": DEVICE}
 
 if __name__ == "__main__":
-    # Windows?먯꽌 Psycopg3 鍮꾨룞湲?猷⑦봽 吏?먯쓣 ?꾪빐 reload=False 濡??ㅼ젙?댁빞 ?먯떇 ?꾨줈?몄뒪 ?ъ깮?깆뿉 ?곕Ⅸ 猷⑦봽 珥덇린??踰꾧렇瑜?留됱쓣 ???덉뒿?덈떎.
+    # Windows에서 Psycopg3 비동기 루프 지원을 위해 reload=False 로 설정해야 자식 프로세스 재생성에 따른 루프 초기화 버그를 막을 수 있습니다.
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
