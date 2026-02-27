@@ -29,23 +29,30 @@ def korean_custom_preprocess(text: str) -> List[str]:
     text = re.sub(r'[^가-힣A-Za-z0-9]', ' ', text)
     return text.split()
 
-def _load_or_create_bm25_retriever(vector_store):
+def _load_or_create_bm25_retriever(vector_store, force_refresh: bool = False):
     """
     BM25 리트리버를 메모리(Singleton) -> 캐시 파일 -> RDS 순으로 로드합니다.
     """
     global CACHED_BM25_RETRIEVER
     
-    if CACHED_BM25_RETRIEVER is not None:
+    if CACHED_BM25_RETRIEVER is not None and not force_refresh:
         return CACHED_BM25_RETRIEVER
 
     if not CACHE_DIR.exists():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    if BM25_CACHE_PATH.exists():
+    if BM25_CACHE_PATH.exists() and not force_refresh:
         print(f"📦 BM25 인덱스 캐시 로드 중 (File): {BM25_CACHE_PATH}")
         with open(BM25_CACHE_PATH, "rb") as f:
             CACHED_BM25_RETRIEVER = pickle.load(f)
             return CACHED_BM25_RETRIEVER
+            
+    if force_refresh and BM25_CACHE_PATH.exists():
+        try:
+            BM25_CACHE_PATH.unlink()
+            print("🗑️ 기존 BM25 캐시 파일을 삭제했습니다.")
+        except Exception as e:
+            pass
     
     print("⚠️ BM25 캐시가 없습니다. RDS에서 모든 문서를 로드하여 인덱스를 생성합니다.")
     start_time = time.time()
@@ -123,3 +130,97 @@ def get_hybrid_retriever(
     
     print(f"✅ 하이브리드 리트리버 준비 완료 (가중치: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
     return ensemble_retriever
+
+def refresh_bm25_index():
+    """관리자 PDF 업로드 후 BM25 캐시 및 메모리 상주 객체를 강제로 초기화 및 재구축합니다."""
+    global CACHED_BM25_RETRIEVER
+    print("🔄 BM25 인덱스 전격 강제 초기화 (Refresh) 시작...")
+    CACHED_BM25_RETRIEVER = None
+    
+    from app.vectorstore.pgvector_store import get_vector_store
+    from app.vectorstore.pgvector_store import PGVectorStoreManager
+    
+    with PGVectorStoreManager() as _:
+        vs = get_vector_store(collection_name=COLLECTION_NAME)
+        _load_or_create_bm25_retriever(vs, force_refresh=True)
+    
+    print("✅ BM25 인덱스 글로벌 리프레시 완료!")
+
+def update_bm25_cache_for_uploaded_source(source_keys: List[str]):
+    """
+    관리자 PDF 업로드 시 새로 추가되거나 삭제된 문서만 캐시에 반영하여 
+    RDS 전체 로드를 방지하는 준-증분 업데이트 로직
+    """
+    global CACHED_BM25_RETRIEVER
+    if not source_keys:
+        return
+        
+    print(f"⚡ [BM25] 준-증분 업데이트 시도: {source_keys}")
+    
+    try:
+        from app.vectorstore.pgvector_store import get_vector_store
+        vs = get_vector_store(collection_name=COLLECTION_NAME)
+        
+        # 1. 파일이 존재하는지 확인하고 기존 캐시 로드 시도
+        if CACHED_BM25_RETRIEVER is None:
+            # 캐시가 아예 메모리에 없으면(처음 올렸을 때 등) load_or_create 를 탄다.
+            # 이 경우 전체 갱신이 일어날 수도 있지만, 이미 존재하는 파일이 없을 경우 대비
+            if not BM25_CACHE_PATH.exists():
+                 print("⚠️ 기존 BM25 캐시가 없어 기본 리프레시를 수행합니다.")
+                 refresh_bm25_index()
+                 return
+                 
+            with open(BM25_CACHE_PATH, "rb") as f:
+                 CACHED_BM25_RETRIEVER = pickle.load(f)
+                 
+        if CACHED_BM25_RETRIEVER is None:
+             refresh_bm25_index()
+             return
+             
+        # 기존 문서 보존하면서 삭제된 소스를 필터링
+        print(f"🗑️ [BM25] 기존 인덱스에서 삭제 및 업데이트 대상 필터링 중...")
+        filtered_docs = []
+        for d in CACHED_BM25_RETRIEVER.docs:
+            if d.metadata and d.metadata.get("source_key") not in source_keys and d.metadata.get("source_file", "").replace(".md", ".pdf") not in source_keys:
+               filtered_docs.append(d)
+               
+        # 새로운 문서 가져오기 (RDS 활용)
+        print(f"📥 [BM25] RDS에서 새로운({len(source_keys)}개 소스) 청크 로딩 중...")
+        new_docs = []
+        # source_key 로 메타데이터 필터링하여 가져온다. langchain-pgvector의 search 방식 활용
+        # 모든 청크를 가져오려면 비어있는 query를 사용하고 filter 적용
+        for source_key in source_keys:
+             source_md = source_key.replace(".pdf", ".md")
+             # Try matching "source_file" in metadata
+             docs = vs.similarity_search("", k=10000, filter={"source_file": source_md})
+             new_docs.extend(docs)
+             
+        # 만약 못가져온게 있다면 source_key 로도 시도 (혹시 cmetadata 구조 다름 대비)
+        if not new_docs:
+             for source_key in source_keys:
+                  docs = vs.similarity_search("", k=10000, filter={"source_key": source_key})
+                  new_docs.extend(docs)
+
+        # 합친 후 새로운 인덱스 생성
+        combined_docs = filtered_docs + new_docs
+        print(f"🔄 [BM25] 병합 완료: 총 {len(combined_docs)} 문서를 사용하여 BM25 재구축 연산 시작...")
+        
+        start_time = time.time()
+        new_bm25 = BM25Retriever.from_documents(
+            combined_docs,
+            preprocess_func=korean_custom_preprocess
+        )
+        new_bm25.k = CACHED_BM25_RETRIEVER.k
+        
+        # 캐싱 및 덮어쓰기
+        with open(BM25_CACHE_PATH, "wb") as f:
+            pickle.dump(new_bm25, f)
+            
+        CACHED_BM25_RETRIEVER = new_bm25
+        end_time = time.time()
+        print(f"✅ [BM25] 준-증분 업데이트 완료 ({end_time - start_time:.2f}초 소요)")
+        
+    except Exception as e:
+        print(f"❌ [BM25] 준-증분 업데이트 오류: {e}")
+        print("Fallback으로 전체 초기화를 진행합니다.")
+        refresh_bm25_index()

@@ -137,6 +137,111 @@ def _upsert_registry_rows(rows: list[tuple[Any, ...]]) -> None:
             conn.commit()
 
 
+def get_all_registry_documents(collection_name: str = "welding_robotics_manuals") -> list[dict[str, Any]]:
+    _ensure_registry_table()
+    with open_optional_ssh_tunnel() as tunnel:
+        conn_args = get_connection_kwargs()
+        if tunnel:
+            conn_args["host"] = tunnel["host"]
+            conn_args["port"] = tunnel["port"]
+        with psycopg2.connect(**conn_args) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT source_key, COUNT(chunk_id) as chunk_count, 
+                           MAX(created_at) as created_at, 
+                           MAX(s3_pdf_key) as s3_pdf_key, MAX(s3_md_key) as s3_md_key
+                    FROM {REGISTRY_TABLE}
+                    WHERE collection_name = %s
+                    GROUP BY source_key
+                    ORDER BY created_at DESC
+                    """,
+                    (collection_name,)
+                )
+                rows = cur.fetchall()
+                # To get creator, we can either join or just fetch from PGVector metadata, but a simpler way is to fetch creator from langchain_pg_embedding
+                # For now let's just return the basic info and we'll fetch creator directly in a joined query
+                
+                cur.execute(
+                    f"""
+                    SELECT r.source_key, r.chunk_count, r.created_at, r.s3_pdf_key, r.s3_md_key, e.creator
+                    FROM (
+                        SELECT source_key, COUNT(chunk_id) as chunk_count, 
+                               MAX(created_at) as created_at, 
+                               MAX(s3_pdf_key) as s3_pdf_key, MAX(s3_md_key) as s3_md_key,
+                               MAX(chunk_id) as any_chunk_id
+                        FROM {REGISTRY_TABLE}
+                        WHERE collection_name = %s
+                        GROUP BY source_key
+                    ) r
+                    LEFT JOIN langchain_pg_embedding e ON e.custom_id = r.any_chunk_id
+                    ORDER BY r.created_at DESC
+                    """,
+                    (collection_name,)
+                )
+                rows_with_creator = cur.fetchall()
+                
+    return [
+        {
+            "source_key": row[0],
+            "chunk_count": row[1],
+            "created_at": row[2],
+            "s3_pdf_key": row[3],
+            "s3_md_key": row[4],
+            "creator": row[5] or "admin"
+        }
+        for row in rows_with_creator
+    ]
+
+
+def delete_registry_documents_by_sources(source_keys: list[str], collection_name: str = "welding_robotics_manuals") -> dict[str, Any]:
+    if not source_keys:
+        return {"deleted_chunks": 0, "s3_keys_to_delete": []}
+        
+    _ensure_registry_table()
+    s3_keys_to_delete = []
+    chunk_ids_to_delete = []
+    
+    with open_optional_ssh_tunnel() as tunnel:
+        conn_args = get_connection_kwargs()
+        if tunnel:
+            conn_args["host"] = tunnel["host"]
+            conn_args["port"] = tunnel["port"]
+        with psycopg2.connect(**conn_args) as conn:
+            with conn.cursor() as cur:
+                # 1. Fetch chunk_ids and s3 keys
+                cur.execute(
+                    f"""
+                    SELECT chunk_id, s3_pdf_key, s3_md_key 
+                    FROM {REGISTRY_TABLE}
+                    WHERE collection_name = %s AND source_key = ANY(%s)
+                    """,
+                    (collection_name, source_keys)
+                )
+                rows = cur.fetchall()
+                for row in rows:
+                    chunk_ids_to_delete.append(row[0])
+                    if row[1] and row[1] not in s3_keys_to_delete:
+                        s3_keys_to_delete.append(row[1])
+                    if row[2] and row[2] not in s3_keys_to_delete:
+                        s3_keys_to_delete.append(row[2])
+                    
+                    # Also reconstruct json key if pdf key exists
+                    if row[1]:
+                        s3_json_key = row[1] + '.json'
+                        if s3_json_key not in s3_keys_to_delete:
+                            s3_keys_to_delete.append(s3_json_key)
+
+    if chunk_ids_to_delete:
+        with PGVectorStoreManager(collection_name=collection_name) as vector_store:
+            vector_store.delete(ids=chunk_ids_to_delete, collection_only=True)
+        _delete_registry_rows(collection_name, chunk_ids_to_delete)
+        
+    return {
+        "deleted_chunks": len(chunk_ids_to_delete),
+        "s3_keys_to_delete": s3_keys_to_delete
+    }
+
 def _write_local_markdown(markdown_text: str, original_filename: str, file_hash: str) -> str:
     out_dir = DATA_DIR / "processed" / "uploads_md"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -223,6 +328,7 @@ def incremental_embed_markdown_to_pgvector(
     collection_name: str = "welding_robotics_manuals",
     s3_pdf_key: str | None = None,
     s3_md_key: str | None = None,
+    file_metadata_json: str | None = None,
 ) -> dict[str, Any]:
     """
     Incrementally upsert parsed markdown chunks into PGVector.
@@ -247,6 +353,21 @@ def incremental_embed_markdown_to_pgvector(
         raw_meta = dict(getattr(doc, "metadata", {}) or {})
         chapter_path = str(raw_meta.get("chapter_path", ""))
         cmetadata = _build_legacy_cmetadata(doc, original_filename)
+        
+        if file_metadata_json:
+            import json
+            try:
+                parsed_meta = json.loads(file_metadata_json)
+                for k, v in parsed_meta.items():
+                    if isinstance(v, list):
+                        cmetadata[k] = ", ".join(map(str, v))
+                    elif isinstance(v, (str, int, float, bool)):
+                        cmetadata[k] = v
+                    else:
+                        cmetadata[k] = str(v)
+            except json.JSONDecodeError:
+                pass
+                
         chunk_hash = _sha256_text(f"{chapter_path}\n{doc.page_content}")
         chunk_id = _sha256_text(f"{source_key}\n{chunk_hash}")
         current_chunk_ids.append(chunk_id)

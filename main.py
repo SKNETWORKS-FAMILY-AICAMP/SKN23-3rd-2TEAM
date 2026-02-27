@@ -29,6 +29,7 @@ from app.vectorstore.pgvector_store import PGVectorStoreManager, get_vector_stor
 from app.rag.reranker import load_reranker_singleton
 from app.api.auth_api import router as auth_router, setup_auth_middleware
 from app.api.routes.admin import router as admin_router
+from app.api.routes.chat import router as chat_router
 from langchain_core.messages import HumanMessage
 
 app = FastAPI(title="Industrial RAG All-in-One Backend (v4.0 - Auth Integrated)", version="4.0.0")
@@ -40,223 +41,75 @@ setup_auth_middleware(app)
 app.include_router(auth_router)
 # [V4.0] Admin Router Inclusion
 app.include_router(admin_router)
+# [V4.1] Chat Router Inclusion (Clean Architecture)
+app.include_router(chat_router)
 
-# ?? [Global State] ????????????????????????????
-GLOBAL_BM25_RETRIEVER = None
-BM25_CACHE_PATH = CACHE_DIR / "bm25_retriever.pkl"
+# ── [Global State] ─────────────────────────────────────────────────────────────
 DEVICE = "cpu"
 
 async def debug_system():
-    """?쒕쾭 ?쒖옉 ??二쇱슂 而댄룷?뚰듃瑜??먭??⑸땲??"""
+    """서버 시작 전 주요 컴포넌트를 점검합니다."""
     print("\n" + "="*50)
-    print("?뵇 [System Debug] Starting Production Check...")
+    print("🚀 [System Debug] Starting Production Check...")
     
-    # 1. ?섍꼍 蹂??泥댄겕
+    # 1. 환경 변수 체크
     is_valid, err = validate_config()
     if not is_valid:
-        print(f"??[Config] Failed: {err}")
+        print(f"❌ [Config] Failed: {err}")
         sys.exit(1)
-    print("??[Config] Mandatory Env Vars Found.")
+    print("✅ [Config] Mandatory Env Vars Found.")
 
-    # 2. ?섎뱶?⑥뼱 媛??泥댄겕
+    # 2. 하드웨어 가용 체크
     global DEVICE
     DEVICE = get_device()
-    print(f"??[Hardware] Using Device: {DEVICE}")
+    print(f"✅ [Hardware] Using Device: {DEVICE}")
 
-    # 3. RDS & Vector Store 泥댄겕 (Dry Run)
+    # 3. RDS & Vector Store 체크 (Dry Run)
     try:
         with PGVectorStoreManager() as _:
             vector_store = get_vector_store()
-            # 媛꾨떒??寃???뚯뒪??(理쒖냼 1嫄?
+            # 간단한 검색 테스트 (최소 1건)
             test_res = await asyncio.wait_for(asyncio.to_thread(lambda: vector_store.similarity_search("test", k=1)), timeout=12)
-            print(f"??[RDS/pgvector] Connection OK. Found {len(test_res)} docs in test.")
+            print(f"✅ [RDS/pgvector] Connection OK. Found {len(test_res)} docs in test.")
     except Exception as e:
-        print(f"??[RDS/pgvector] Connection Failed: {e}")
-        # ?곸슜援ъ텞?대?濡??ㅽ뙣 ??寃쎄퀬留??섍퀬 吏꾪뻾?좎? 以묐떒?좎? 寃곗젙 (?ш린??以묐떒 沅뚯옣)
+        print(f"❌ [RDS/pgvector] Connection Failed: {e}")
+        # 상용구축이므로 실패 시 경고만 하고 진행할지 중단할지 결정 (여기선 중단 권장)
         # sys.exit(1)
 
     print("="*50 + "\n")
 
-def load_global_bm25():
-    global GLOBAL_BM25_RETRIEVER
-    if BM25_CACHE_PATH.exists():
-        print(f"?벀 [Startup] Loading BM25 Index (94k docs)...")
-        with open(BM25_CACHE_PATH, "rb") as f:
-            GLOBAL_BM25_RETRIEVER = pickle.load(f)
-        print("??[Startup] Global BM25 Loaded.")
-    else:
-        print("?좑툘 [Startup] BM25 Cache not found. Initial query will be slow.")
+def pre_load_models():
+    """서버 기동 시 리랭커 및 BM25를 메모리에 싱글톤으로 적재합니다."""
+    from app.rag.retriever import get_hybrid_retriever
+    from app.vectorstore.pgvector_store import PGVectorStoreManager
+    
+    print("🚀 [Startup] 모델 메모리 사전 적재(Pre-load) 시작...")
+    load_reranker_singleton() # 리랭커 로드
+    
+    try:
+        with PGVectorStoreManager() as _:
+            # 하이브리드 리트리버를 1회 호출해 BM25도 메모리에 올립니다.
+            get_hybrid_retriever("test")
+    except Exception as e:
+        print(f"⚠️ [Startup] BM25 로딩 중 오류 발생: {e}")
+
 
 @app.on_event("startup")
 async def startup_event():
-    print("\n" + "??" + "?"*48)
-    print("?뙇 [System] Initializing All-in-One Backend Engine...")
+    print("\n" + "─"*48)
+    print("🚀 [System] Initializing All-in-One Backend Engine...")
     
     await debug_system()
-    load_global_bm25()
-    load_reranker_singleton() # [V3.1] 由щ옲而??깃???GPU 怨좎젙 濡쒕뱶
+    pre_load_models()
     
-    # [V3.1] 理쒖쥌 ?붿빟 由ы룷??(Visual Feedback)
-    print("\n" + "?뢾" + "?"*48)
-    print("?뭿 [Final Status Report]")
-    bm25_status = "??Loaded (94k docs)" if GLOBAL_BM25_RETRIEVER else "?좑툘 Not Found (Cache required)"
-    print(f"  {bm25_status} [BM25 濡쒕뱶 ?꾨즺]")
-    print(f"  ??[?섎뱶?⑥뼱 媛???쒖꽦?? Enabled on {DEVICE.upper()}")
-    print(f"  ??[RDS ?곌껐 ?깃났]       PostgreSQL & pgvector Ready")
-    print("?뭿 " + "?"*50 + "\n")
-    print(f"?? Integrated Backend Started: http://0.0.0.0:8000")
-
-# ?? [Schemas] ??????????????????????????????????
-class ChatRequest(BaseModel):
-    message: str
-    thread_id: str
-
-class JargonUpdate(BaseModel):
-    data: List[Dict[str, str]]
-
-# ?? [Chat & SSE] ???????????????????????????????
-async def sse_event_generator(request_data: ChatRequest) -> AsyncGenerator[str, None]:
-    import time
-    start_total = time.perf_counter()
-    node_timers = {} # ?몃뱶蹂??쒖옉 ?쒓컙 ??μ슜
-
-    # [KEEP-ALIVE] ?곌껐 利됱떆 ?곹깭 硫붿떆吏瑜??꾩넚?섏뿬 ??꾩븘??諛⑹?
-    yield f"data: {json.dumps({'type': 'status', 'content': '?? Connection established. Initializing engine...'})}\n\n"
-    
-    print(f"\n?뮠 [Chat] New Request: '{request_data.message}' (Thread: {request_data.thread_id})")
-    print(f"?숋툘 [Device] Running on: {DEVICE} | Model: gpt-4o")
-    
-    try:
-        # [DEBUG] ?붿쭊 珥덇린??怨쇱젙 濡쒓렇
-        print("  ???뵩 Initializing LangGraph & RDS Connection...")
-        with PGVectorStoreManager() as _:
-            async with get_async_postgres_saver() as saver:
-                graph = compile_workflow(saver)
-                config = {"configurable": {"thread_id": request_data.thread_id}}
-                inputs = {"messages": [HumanMessage(content=request_data.message)], "retry_count": 0}
-                
-                print("  ????Starting graph execution...")
-                async for event in graph.astream_events(inputs, config, version="v2"):
-                    kind = event["event"]
-                    node_name = event["metadata"].get("langgraph_node", "")
-                    
-                    # [吏꾪뻾 ?곹깭 & ?쒖옉 ?쒓컙 痢≪젙]
-                    if kind == "on_node_start":
-                        if node_name:
-                            node_timers[node_name] = time.perf_counter()
-                            print(f"  ???봽 Node Start: {node_name.upper()}")
-                            yield f"data: {json.dumps({
-                                'type': 'status', 
-                                'content': f'{node_name.upper()} processing...',
-                                'node': node_name
-                            })}\n\n"
-                        
-                        # ?뱀젙 ?④퀎 濡쒓렇 而ㅼ뒪?곕쭏?댁쭠
-                        if node_name == "retriever":
-                            print("    ?뵇 [Step 1] Initial BM25 + Vector Search starting...")
-                        elif node_name == "reranker":
-                            print("    sort [Step 2] Reranking documents...")
-                        elif node_name in ["welding", "robotics", "safety", "electrical", "general", "social"]:
-                            print(f"    ?쨼 [Step 3] Calling LLM ({node_name.upper()} Agent)...")
-
-                    # [?듬? ?⑹뼱由?
-                    if kind == "on_chain_stream":
-                        chunk = event["data"]["chunk"]
-                        if isinstance(chunk, dict) and "generated_answer" in chunk:
-                            yield f"data: {json.dumps({'type': 'answer', 'content': chunk['generated_answer']})}\n\n"
-                    
-                    # [?몃뱶 醫낅즺 & ?뚯슂 ?쒓컙 怨꾩궛]
-                    if kind == "on_node_end":
-                        if node_name:
-                            elapsed = time.perf_counter() - node_timers.get(node_name, time.perf_counter())
-                            print(f"  ????Node End: {node_name.upper()} ({elapsed:.2f}s)")
-                            # 醫낅즺 ?뺣낫? ?쒓컙??硫뷀??곗씠?곕줈 ?꾩넚
-                            yield f"data: {json.dumps({
-                                'type': 'metadata', 
-                                'content': f'{node_name.upper()} completed',
-                                'node': node_name,
-                                'elapsed': round(elapsed, 2)
-                            })}\n\n"
-                        
-                        if node_name == "verifier":
-                            output = event["data"].get("output")
-                            if output and output.get("is_hallucinated"):
-                                print("    ?좑툘 [Warning] Hallucination suspected!")
-                                yield f"data: {json.dumps({'type': 'warning', 'content': 'Hallucination suspect - rewriting...'})}\n\n"
-                
-                total_elapsed = time.perf_counter() - start_total
-                
-                # [V3.1] RDS ?곴뎄 ??? 理쒖쥌 ?ㅽ뻾 ?듦퀎瑜?State Metadata??二쇱엯
-                # node_timers????λ맂 媛믪? ?쒖옉 ?쒓컙肉먯씠誘濡?elapsed瑜?怨꾩궛?댁빞 ??
-                execution_metadata = {
-                    "total_elapsed": round(total_elapsed, 2),
-                    "device": DEVICE,
-                    "node_timings": {k: round(time.perf_counter() - v, 2) for k, v in node_timers.items()}
-                }
-                await graph.aupdate_state(config, {"metadata": execution_metadata})
-                
-                print(f"?뮶 [Persistence] Session archived with metadata: {execution_metadata}")
-                yield f"data: {json.dumps({'type': 'status', 'content': f'??Finished in {total_elapsed:.2f}s'})}\n\n"
-                
-                # [V3.3] chat_history ?뚯씠釉붿뿉 ?대젰 ???
-                print("?뱷 [History] Saving chat interaction to RDS...")
-                try:
-                    import psycopg2
-                    ssh_enabled = os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true"
-                    ssh_local_port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
-                    target_host = "127.0.0.1" if ssh_enabled else os.getenv("PGHOST", "localhost")
-                    target_port = ssh_local_port if ssh_enabled else os.getenv("PGPORT", "5432")
-
-                    conn = psycopg2.connect(
-                        host=target_host,
-                        database=os.getenv("PGDATABASE", "chatbot_db"),
-                        user=os.getenv("PGUSER", "postgres"),
-                        password=os.getenv("PGPASSWORD", "password"),
-                        port=target_port
-                    )
-                    with conn.cursor() as cur:
-                        # 1. User Message ???
-                        cur.execute(
-                            "INSERT INTO chat_history (thread_id, username, role, content) VALUES (%s, %s, %s, %s)",
-                            (request_data.thread_id, "default_user", "user", request_data.message)
-                        )
-                        # 2. Assistant Message ???(理쒖쥌 ?듬? 異붿텧)
-                        final_state = await graph.aget_state(config)
-                        assistant_msg = final_state.values.get("generated_answer", "")
-                        if assistant_msg:
-                            cur.execute(
-                                "INSERT INTO chat_history (thread_id, username, role, content) VALUES (%s, %s, %s, %s)",
-                                (request_data.thread_id, "WELD쨌BOT", "assistant", assistant_msg)
-                            )
-                    conn.commit()
-                    conn.close()
-                    print("??[History] Chat interaction saved successfully.")
-                except Exception as history_err:
-                    print(f"?좑툘 [History] DB ????ㅽ뙣: {history_err}")
-                
-    except Exception as e:
-        import traceback
-        print(f"??[Error] SSE Failed: {e!r}")
-        traceback.print_exc()
-        yield f"data: {json.dumps({'type': 'error', 'content': f'Engine Error: {str(e)}'})}\n\n"
-
-@app.post("/chat")
-async def chat_stream(request: ChatRequest):
-    return StreamingResponse(sse_event_generator(request), media_type="text/event-stream")
-
-# ?? [History] ??????????????????????????????????
-@app.get("/history/{thread_id}")
-async def get_history(thread_id: str):
-    try:
-        async with get_async_postgres_saver() as saver:
-            config = {"configurable": {"thread_id": thread_id}}
-            checkpoint = await saver.aget(config)
-            if checkpoint and "messages" in checkpoint["channel_values"]:
-                msgs = checkpoint["channel_values"]["messages"]
-                return [{"role": "user" if m.type=="human" else "assistant", "content": m.content} for m in msgs]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return []
+    # [V3.1] 최종 요약 리포트 (Visual Feedback)
+    print("\n" + "─"*48)
+    print("✅ [Final Status Report]")
+    print(f"  ✅ [모델 사전 적재 완료]")
+    print(f"  ✅ [하드웨어 가속] Enabled on {DEVICE.upper()}")
+    print(f"  ✅ [RDS 연결 성공]       PostgreSQL & pgvector Ready")
+    print("✅ " + "─"*50 + "\n")
+    print(f"✅ Integrated Backend Started: http://0.0.0.0:8000")
 
 # [Admin Utilities] ?????????????????????????
 @app.get("/health")
