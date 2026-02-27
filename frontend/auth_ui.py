@@ -92,6 +92,7 @@ def show_auth_page(api, API_URL):
                 st.session_state.user = data.get("user")
                 st.session_state.access_token = _normalize_token(data.get("weld_auth_token"))
                 st.session_state.authenticated = bool(st.session_state.user and st.session_state.access_token)
+                st.session_state.force_logged_out = False
                 if st.session_state.access_token:
                     _save_access_token_cookie(st.session_state.access_token)
                     st.session_state.cookie_restore_attempted = False
@@ -133,10 +134,13 @@ def show_auth_page(api, API_URL):
             st.session_state.user = data.get("user")
             st.session_state.access_token = _normalize_token(token)
             st.session_state.authenticated = True
+            st.session_state.force_logged_out = False
             _save_access_token_cookie(st.session_state.access_token)
             st.session_state.cookie_restore_attempted = False
             st.success(f"{login_id}님 환영합니다.")
-            return
+            import time
+            time.sleep(0.5)
+            st.rerun()
 
         st.markdown("---")
         st.markdown("### 소셜 로그인")
@@ -191,7 +195,10 @@ def logout(api, API_URL):
     st.session_state.user = None
     st.session_state.authenticated = False
     st.session_state.access_token = None
+    st.session_state.force_logged_out = True
     _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
+    import time
+    time.sleep(0.5)
     st.rerun()

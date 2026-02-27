@@ -129,10 +129,20 @@ def run_all():
     except KeyboardInterrupt:
         print("\n🛑 Stopping services...")
     finally:
-        tunnel_proc.terminate()
-        backend_proc.terminate()
-        frontend_proc.terminate()
-        print("Done.")
-
+        print("\n🛑 Sending SIGTERM to all workers for graceful shutdown...")
+        for p in [tunnel_proc, backend_proc, frontend_proc]:
+            if p.poll() is None:
+                p.terminate()
+        
+        # Wait for up to 5 seconds for them to exit cleanly
+        for p in [tunnel_proc, backend_proc, frontend_proc]:
+            if p.poll() is None:
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print("⚠️ Process did not terminate in time, forcing kill...")
+                    p.kill()
+                    
+        print("✅ All processes terminated cleanly. Exiting.")
 if __name__ == "__main__":
     run_all()

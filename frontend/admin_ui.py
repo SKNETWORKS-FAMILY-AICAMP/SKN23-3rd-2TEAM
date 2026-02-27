@@ -5,7 +5,6 @@ def show_admin_page():
     import psycopg2
 
     from app.core.database import (
-        get_chat_logs,
         get_connection_kwargs,
         open_optional_ssh_tunnel
     )
@@ -46,10 +45,9 @@ def show_admin_page():
     st.title("📊 관리자 통합 대시보드")
     st.caption("WELD-BOT 문서 관리 · Vector DB · 로그 모니터링")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📥 Ingestion",
         "🗂 Vector Registry",
-        "💬 Chat Logs",
         "👥 Users",
         "🤖 Model Settings",
         "🧹 Embedding 상태관리",
@@ -138,11 +136,13 @@ def show_admin_page():
 
             with col1:
                 st.markdown("### Markdown")
-                st.code(st.session_state.preview_md, language="markdown")
+                with st.container(height=600):
+                    st.code(st.session_state.preview_md, language="markdown")
 
             with col2:
                 st.markdown("### Metadata JSON")
-                st.code(st.session_state.preview_json, language="json")
+                with st.container(height=600):
+                    st.code(st.session_state.preview_json, language="json")
 
             col_btn1, col_btn2 = st.columns(2)
 
@@ -237,43 +237,11 @@ def show_admin_page():
                 st.info("저장된 문서 없음")
 
 
+
     # =====================================================
-    # TAB 3 - CHAT LOGS
+    # TAB 3 - USERS
     # =====================================================
     with tab3:
-
-        st.markdown("## 💬 Chat Interaction Logs")
-
-        logs = get_chat_logs(limit=200)
-
-        if logs:
-            df = pd.DataFrame(logs)
-
-            user_filter = st.selectbox(
-                "사용자 필터",
-                ["All"] + list(df["username"].unique())
-            )
-
-            if user_filter != "All":
-                df = df[df["username"] == user_filter]
-
-            search_query = st.text_input("질문 검색")
-
-            if search_query:
-                df = df[df["query"].str.contains(search_query, case=False)]
-
-            st.dataframe(df, use_container_width=True)
-
-            st.subheader("📈 User Activity")
-            st.bar_chart(df["username"].value_counts())
-        else:
-            st.info("로그 없음")
-
-
-    # =====================================================
-    # TAB 4 - USERS
-    # =====================================================
-    with tab4:
 
         st.markdown("## 👥 User Registrations")
 
@@ -300,7 +268,7 @@ def show_admin_page():
                     users,
                     columns=["ID", "Username", "Role", "Created At"]
                 )
-                st.dataframe(user_df, use_container_width=True)
+                st.dataframe(user_df, width="stretch")
             else:
                 st.info("가입 사용자 없음")
 
@@ -309,9 +277,9 @@ def show_admin_page():
 
 
     # =====================================================
-    # TAB 5 - MODEL SETTINGS
+    # TAB 4 - MODEL SETTINGS
     # =====================================================
-    with tab5:
+    with tab4:
         st.markdown("## 🤖 LLM 모델 설정")
         st.caption("Fast/Accurate 모델을 관리자 페이지에서 즉시 변경할 수 있습니다.")
 
@@ -393,9 +361,9 @@ def show_admin_page():
 
 
     # =====================================================
-    # TAB 6 - EMBEDDING STATUS MANAGEMENT
+    # TAB 5 - EMBEDDING STATUS MANAGEMENT
     # =====================================================
-    with tab6:
+    with tab5:
         st.markdown("## 🧹 임베딩 비활성화 관리")
         st.caption("파일명/관리자/업로드일 검색 후 use_yn 상태를 변경할 수 있습니다.")
 
@@ -459,7 +427,7 @@ def show_admin_page():
             view_col, pick_col = st.columns([3, 2])
 
             with view_col:
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, width="stretch")
 
             with pick_col:
                 selector_df = df[["source_key", "creator", "use_yn"]].copy()
@@ -467,7 +435,7 @@ def show_admin_page():
                 edited_selector_df = st.data_editor(
                     selector_df,
                     hide_index=True,
-                    use_container_width=True,
+                    width="stretch",
                     disabled=["source_key", "creator", "use_yn"],
                     column_config={
                         "선택": st.column_config.CheckboxColumn("선택"),
@@ -517,3 +485,5 @@ def show_admin_page():
                     st.error(res.text)
             elif activate_btn:
                 st.warning("활성화할 파일을 먼저 체크해 주세요.")
+
+

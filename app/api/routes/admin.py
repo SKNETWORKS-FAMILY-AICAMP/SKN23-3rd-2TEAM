@@ -418,6 +418,7 @@ async def get_model_config(current_user: dict = Depends(get_me)):
     return ModelSettingsResponse(
         model_fast=settings["model_fast"],
         model_accurate=settings["model_accurate"],
+        evaluation_model=settings.get("evaluation_model", "gpt-4o"),
         available_models=list_available_chat_models(),
     )
 
@@ -443,5 +444,7 @@ async def update_model_config(
     return ModelSettingsResponse(
         model_fast=settings["model_fast"],
         model_accurate=settings["model_accurate"],
+        evaluation_model=settings.get("evaluation_model", "gpt-4o"),
         available_models=list_available_chat_models(),
     )
+

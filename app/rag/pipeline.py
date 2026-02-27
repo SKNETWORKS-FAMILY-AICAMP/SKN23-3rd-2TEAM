@@ -10,6 +10,28 @@
 # ============================================================
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.documents import Document
+import tiktoken
+
+def truncate_context_by_tokens(context_list: list[str], max_tokens: int = 6000, model_name: str = "gpt-4o") -> str:
+    """검색된 청크 리스트를 토큰 제한에 맞게 안전하게 병합 및 절사합니다."""
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base") # Fallback
+        
+    final_context = ""
+    current_tokens = 0
+    
+    for chunk_text in context_list:
+        chunk_tokens = len(encoding.encode(chunk_text))
+        if current_tokens + chunk_tokens > max_tokens:
+            print(f"⚠️ Token limit reached ({current_tokens}/{max_tokens}). Truncating remaining context.")
+            break
+            
+        final_context += chunk_text
+        current_tokens += chunk_tokens
+        
+    return final_context.strip()
 
 from app.rag.retriever import get_hybrid_retriever as build_hybrid_retriever
 from app.rag.reranker import rerank_documents
@@ -108,10 +130,11 @@ def run_advanced_rag(
     if not is_found or not top_docs:
         return "(관련 매뉴얼 문서를 찾을 수 없습니다.)", max_score
 
-    context = "\n\n---\n\n".join([
-        f"[출처: {doc.metadata.get('source','?')} | {doc.metadata.get('chapter_path','?')}]\n{doc.page_content}"
+    context_pieces = [
+        f"[출처: {doc.metadata.get('source','?')} | {doc.metadata.get('chapter_path','?')}]\n{doc.page_content}\n\n---\n\n"
         for doc in top_docs
-    ])
+    ]
+    context = truncate_context_by_tokens(context_pieces, max_tokens=6000)
     # 메타데이터를 Context 머리말에 삽입 → LLM이 [출처:...] 태그를 답변에 그대로 사용 가능
 
     print(f"[Advanced RAG] 최종 Context 길이: {len(context)}자 ({len(top_docs)}개 청크)")
@@ -180,10 +203,10 @@ def run_rag_pipeline(query: str, domain: str, filters: Dict[str, Any] = None) ->
     if not is_found or not top_docs:
         return "(관련 매뉴얼 없음)", max_score
 
-    # 5. Context 생성
-    context = "\n\n---\n\n".join([
-        f"[출처: {doc.metadata.get('source_file','?')} | {doc.metadata.get('Header 1','?')}]\n{doc.page_content}"
+    context_pieces = [
+        f"[출처: {doc.metadata.get('source_file','?')} | {doc.metadata.get('Header 1','?')}]\n{doc.page_content}\n\n---\n\n"
         for doc in top_docs
-    ])
+    ]
+    context = truncate_context_by_tokens(context_pieces, max_tokens=6000)
     
     return context, max_score
