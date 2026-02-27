@@ -126,54 +126,56 @@ async def stream_chat_response(
 
             if event_kind == "on_node_start":
                 node_timers[node_name] = time.perf_counter()
+                
+                # 프론트엔드 진행바(Status)를 위한 사용자 친화적 메시지 매핑
+                status_msg = f"{node_name.upper()} processing..."
+                if node_name in ("welding", "robotics", "electrical", "general"):
+                    status_msg = "🔍 관련된 전문 매뉴얼을 검색하고 분석하는 중입니다..."
+                elif node_name == "verifier":
+                    status_msg = "🛡️ 답변에 잘못된 정보(환각)가 있는지 검증하고 있습니다..."
+                elif node_name == "feedback_rewriter":
+                    status_msg = "🔄 피드백을 반영하여 더 정확하고 안전한 답변으로 재작성 중입니다..."
+                elif node_name == "router":
+                    status_msg = "🚦 질문의 의도를 분석하여 적절한 에이전트를 할당 중입니다..."
+                elif node_name == "social":
+                    status_msg = "💬 일상 대화에 답변하는 중입니다..."
+                
                 yield json.dumps({
                     'type': 'status', 
-                    'content': f'{node_name.upper()} processing...',
+                    'content': status_msg,
                     'node': node_name
                 })
             
-            # ── LLM 텍스트 청크 이벤트만 필터링 ──
-            if event_kind == "on_chat_model_stream":
-                if node_name in ("robotics", "welding", "electrical", "general", "fallback", "social"):
-                    streamed_nodes.add(node_name)
-                    chunk_content = event.get("data", {}).get("chunk", {})
-                    if hasattr(chunk_content, "content") and chunk_content.content:
-                        text = chunk_content.content
-                        
-                        # LangChain V2 모델이 마지막에 전체 문장을 한 번 더 출력하는 현상 스킵
-                        if len(text) > 15 and text in yielded_text_buffer:
-                            continue
-                            
-                        yield json.dumps({'type': 'answer', 'content': text})
-                        yielded_text_buffer += text
-
-            # ── 비 스트리밍 노드(social, fallback) 완료 시 텍스트 전송 ──
-            if event_kind == "on_chain_stream":
-                chunk = event.get("data", {}).get("chunk", {})
-                if isinstance(chunk, dict) and "generated_answer" in chunk and node_name in ("social", "fallback"):
-                    if node_name not in streamed_nodes:
-                        yield json.dumps({'type': 'answer', 'content': chunk['generated_answer']})
+            # ── [수정] 중간 노드의 LLM 텍스트 스트리밍 제거 ──
+            # (환각 검증/재작성 루프에서 텍스트가 덮어씌워지는 문제 해결을 위해, 
+            #  최종 그래프 완료 후 한 번에(또는 그때부터) 답변을 스트리밍합니다.)
+            
+            # ── 비 스트리밍 노드(social, fallback) 완료 시 텍스트 전송 (이제 최종 전송으로 통합) ──
                     
             # ── 노드 완료 이벤트 ──
             elif event_kind == "on_node_end":
                 elapsed = time.perf_counter() - node_timers.get(node_name, time.perf_counter())
-                yield json.dumps({
-                    'type': 'metadata', 
-                    'content': f'{node_name.upper()} completed',
-                    'node': node_name,
-                    'elapsed': round(elapsed, 2)
-                })
-                
                 if node_name == "verifier":
                     output = event.get("data", {}).get("output", {})
                     if output and output.get("is_hallucinated"):
-                        yield json.dumps({'type': 'warning', 'content': 'Hallucination suspect - rewriting...'})
+                        yield json.dumps({'type': 'status', 'content': '⚠ 환각(거짓 정보) 요소가 발견되어 안전하게 검토 중입니다...'})
 
         total_elapsed = time.perf_counter() - start_total
         
-        # 최종 상태 확인 및 메타데이터 갱신
+        # ── [수정] 최종 상태 확인 및 답변 스트리밍 ──
         final_state = await app_graph.aget_state(config)
         assistant_msg = final_state.values.get("generated_answer", "")
+        
+        # 그래프 실행이 끝나면 상태바를 완료 처리하기 위한 상태 전송
+        yield json.dumps({'type': 'status_complete', 'content': f'✅ 답변 준비 완료 ({total_elapsed:.2f}s)'})
+        
+        # 최종 확정된 답변을 청크 단위로 나누어 스트리밍 (부드러운 UI 렌더링 효과)
+        if assistant_msg:
+            chunk_size = 15  # 한 번에 보낼 문자 수
+            for i in range(0, len(assistant_msg), chunk_size):
+                chunk_piece = assistant_msg[i:i+chunk_size]
+                yield json.dumps({'type': 'answer', 'content': chunk_piece})
+                await asyncio.sleep(0.01) # 부드러운 스트리밍 타이밍 간격
         
         execution_metadata = {
             "total_elapsed": round(total_elapsed, 2),
@@ -181,8 +183,6 @@ async def stream_chat_response(
             "node_timings": {k: round(time.perf_counter() - v, 2) for k, v in node_timers.items()}
         }
         await app_graph.aupdate_state(config, {"metadata": execution_metadata})
-        
-        yield json.dumps({'type': 'status', 'content': f'✅ Finished in {total_elapsed:.2f}s'})
 
         # [V4.1] chat_logs RDS 로깅 연동
         from app.core.database import log_chat_interaction

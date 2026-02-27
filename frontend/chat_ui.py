@@ -3,6 +3,7 @@ import streamlit as st
 import asyncio
 import requests
 import json
+import time
 from sseclient import SSEClient
 
 # LangGraph, PostgreSQL 의존성을 모두 제거했습니다! (속도/메모리 완벽 최적화)
@@ -29,14 +30,11 @@ def generate_agent_response(user_input: str, thread_id: str, user_id: str = "Unk
         try:
             data = json.loads(event.data)
             # FastAPI의 sse_event_generator는 다양한 type의 이벤트를 보냅니다.
-            # 사용자에게 보여줄 실제 답변 청크만 필터링합니다.
-            if data.get("type") == "answer":
-                yield data.get("content", "")
-            elif data.get("type") in ["error", "warning"]:
-                yield f"\n\n**[{data.get('type').upper()}]** {data.get('content', '')}\n"
+            # UI 단에서 type에 따라 핸들링하도록 dict 전체를 반환합니다.
+            yield data
         except json.JSONDecodeError:
             # JSON 포맷이 아닌 일반 텍스트 스트리밍일 경우 (Fallback)
-            yield event.data
+            yield {"type": "answer", "content": event.data}
 
 
 def show_chat_page():
@@ -72,35 +70,43 @@ def show_chat_page():
             
         # 4. AI 스트리밍 답변 처리 (LangGraph 연동)
         with st.chat_message("assistant"):
-            # [V4.1] "분석 중..." 로딩 애니메이션 상태 구성
+            # "분석 중..." 로딩 애니메이션 상태 구성 (초기엔 열려있음)
             status_container = st.empty()
-            with status_container.status("🔍 기술 문서를 검색하고 분석 중입니다...", expanded=False) as status:
+            with status_container.status("🔍 챗봇이 답변을 준비하고 있습니다...", expanded=True) as status:
                 st.write("요청을 서버로 전송했습니다...")
-                
+            
+            placeholder = st.empty()
+            
             def run_stream():
                 full_text = ""
-                placeholder = st.empty()
                 current_thread_id = f"streamlit_session_{username}"
                 
-                # FastAPI 백엔드 연동 (매우 빠름, SSH/DB 재연결 불필요)
-                first_chunk_received = False
-                for chunk in generate_agent_response(user_input, current_thread_id, user_id):
-                    # 첫 청크 수신 시 (로딩 완료) 상태 메시지 숨김
-                    if not first_chunk_received and chunk:
-                        status_container.empty()
-                        first_chunk_received = True
-
-                    full_text += chunk
-                    placeholder.markdown(full_text + "▌") 
+                # FastAPI 백엔드 연동
+                for event_data in generate_agent_response(user_input, current_thread_id, user_id):
+                    evt_type = event_data.get("type")
+                    content = event_data.get("content", "")
+                    
+                    if evt_type == "status":
+                        status.write(content)
+                    elif evt_type == "status_complete":
+                        status.update(label="✅ 답변 준비 완료", state="complete", expanded=False)
+                    elif evt_type == "answer":
+                        # 스트리밍이 시작되면 상태바를 닫음 (만약 status_complete가 누락될 경우를 대비)
+                        status.update(state="complete", expanded=False)
+                        full_text += content
+                        # 부드러운 스트리밍 UI 위해 매 청크마다 렌더링
+                        placeholder.markdown(full_text + "▌")
+                    elif evt_type in ["error", "warning"]:
+                        status.write(f"⚠️ {content}")
+                        if evt_type == "error":
+                            status.update(label="에러 발생", state="error", expanded=True)
                 
+                # 스트리밍 완료 후 커서 제거
                 placeholder.markdown(full_text)
                 return full_text
             
-            # 동기 함수 실행 (requests.get은 동기이므로 asyncio.run 불필요)
+            # 스트림 처리 실행
             final_response = run_stream()
-            
-            # 만약 스트리밍 중 에러로 인해 첫 청크가 안 왔다면 여기서 애니메이션 삭제
-            status_container.empty()
             
             # 대화 기록에 최종 답변 저장
             st.session_state.chat_history.append({"role": "assistant", "content": final_response})

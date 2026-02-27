@@ -270,7 +270,9 @@ async def delete_registry(req: DeleteRequest, background_tasks: BackgroundTasks,
         s3_keys = result.get("s3_keys_to_delete", [])
         if s3_keys:
             s3_client = S3Client()
-            s3_client.delete_files(s3_keys)
+            del_res = s3_client.delete_files(s3_keys)
+            if del_res.get("Errors"):
+                print(f"⚠️ Failed to delete some S3 files: {del_res['Errors']}")
             
         # 3. Refresh BM25 Cache in Background
         if result.get("deleted_chunks", 0) > 0:
