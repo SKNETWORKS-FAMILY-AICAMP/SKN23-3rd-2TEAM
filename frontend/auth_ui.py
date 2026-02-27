@@ -2,9 +2,54 @@ import requests
 import streamlit as st
 
 
+def _normalize_token(raw_token) -> str | None:
+    if raw_token is None:
+        return None
+
+    token = str(raw_token).strip()
+    if not token:
+        return None
+
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        token = token[1:-1].strip()
+
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+
+    return token or None
+
+
+def _save_access_token_cookie(token: str) -> None:
+    controller = st.session_state.get("cookie_controller")
+    normalized_token = _normalize_token(token)
+    if not controller or not normalized_token:
+        return
+    try:
+        # Persist for 7 days; token validity is still enforced by backend exp.
+        controller.set(
+            "weld_access_token",
+            normalized_token,
+            path="/",
+            max_age=60 * 60 * 24 * 7,
+            same_site="lax",
+        )
+    except Exception:
+        pass
+
+
+def _clear_access_token_cookie() -> None:
+    controller = st.session_state.get("cookie_controller")
+    if not controller:
+        return
+    try:
+        controller.remove("weld_access_token", path="/", same_site="lax")
+    except Exception:
+        pass
+
+
 def show_auth_page(api, API_URL):
     st.title("WELDBOT v4.0 Access Control")
-    st.caption("Token cache mode (session_state)")
+    st.caption("Token cache mode (session_state + browser cookie)")
 
     if "access_token" not in st.session_state:
         st.session_state.access_token = None
@@ -17,7 +62,8 @@ def show_auth_page(api, API_URL):
         return
 
     # If a cached token exists, validate it and immediately return to the main app route.
-    cached_token = st.session_state.get("access_token")
+    cached_token = _normalize_token(st.session_state.get("access_token"))
+    st.session_state.access_token = cached_token
     if cached_token and not st.session_state.get("authenticated"):
         try:
             me_resp = api.get(
@@ -28,11 +74,14 @@ def show_auth_page(api, API_URL):
             if me_resp.status_code == 200:
                 st.session_state.user = me_resp.json()
                 st.session_state.authenticated = True
-                st.rerun()
-            else:
+                st.session_state.cookie_restore_attempted = False
+                return
+            elif me_resp.status_code in (401, 403):
                 st.session_state.access_token = None
+                _clear_access_token_cookie()
         except Exception:
-            st.session_state.access_token = None
+            # Keep token on transient backend/network failures.
+            pass
 
     auth_code = st.query_params.get("auth_code")
     if auth_code and not st.session_state.get("authenticated"):
@@ -41,10 +90,13 @@ def show_auth_page(api, API_URL):
             if response.status_code == 200:
                 data = response.json()
                 st.session_state.user = data.get("user")
-                st.session_state.access_token = data.get("weld_auth_token")
+                st.session_state.access_token = _normalize_token(data.get("weld_auth_token"))
                 st.session_state.authenticated = bool(st.session_state.user and st.session_state.access_token)
+                if st.session_state.access_token:
+                    _save_access_token_cookie(st.session_state.access_token)
+                    st.session_state.cookie_restore_attempted = False
                 st.query_params.clear()
-                st.rerun()
+                return
             else:
                 st.error("소셜 로그인 인증에 실패했습니다.")
         except Exception as exc:
@@ -79,10 +131,12 @@ def show_auth_page(api, API_URL):
                 return
 
             st.session_state.user = data.get("user")
-            st.session_state.access_token = token
+            st.session_state.access_token = _normalize_token(token)
             st.session_state.authenticated = True
+            _save_access_token_cookie(st.session_state.access_token)
+            st.session_state.cookie_restore_attempted = False
             st.success(f"{login_id}님 환영합니다.")
-            st.rerun()
+            return
 
         st.markdown("---")
         st.markdown("### 소셜 로그인")
@@ -137,6 +191,7 @@ def logout(api, API_URL):
     st.session_state.user = None
     st.session_state.authenticated = False
     st.session_state.access_token = None
+    _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
     st.rerun()
