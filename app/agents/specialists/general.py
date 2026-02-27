@@ -15,9 +15,9 @@ from app.core.config import MODEL_FAST
 from langchain_community.tools.tavily_search import TavilySearchResults
 from app.core.config import MODEL_FAST, MODEL_ACCURATE, TAVILY_API_KEY
 
-async def generate_general_answer(query: str) -> str:
+async def generate_general_answer(query: str, chat_history: str = "") -> str:
     """
-    [수정됨] Tavily 웹 검색 부분을 임시 주석 처리하고 LLM 단독 답변으로 처리합니다.
+    [수정됨] 대화 맥락을 활용하며, 검색 없이 LLM 단독 답변으로 처리합니다.
     """
     # 1. Tavily 검색 도구 초기화 (주석 처리)
     # search = TavilySearchResults(k=3)
@@ -31,12 +31,12 @@ async def generate_general_answer(query: str) -> str:
         llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0.7)
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", GENERAL_PROMPT), # + "\n\n아래는 웹 검색 결과입니다. 이를 바탕으로 친절하게 답변해주세요:\n{context}"),
-            ("human", "{query}")
+            ("system", GENERAL_PROMPT),
+            ("human", "대화 명세:\n{chat_history}\n\n[현재 질문]\n{query}")
         ])
         
         chain = prompt | llm
-        response = await chain.ainvoke({"query": query}) #, "context": context})
+        response = await chain.ainvoke({"query": query, "chat_history": chat_history})
         return response.content
         
     except Exception as e:
@@ -44,10 +44,10 @@ async def generate_general_answer(query: str) -> str:
         llm = ChatOpenAI(model=MODEL_FAST, temperature=0.7)
         prompt = ChatPromptTemplate.from_messages([
             ("system", GENERAL_PROMPT),
-            ("human", "{query}")
+            ("human", "대화 명세:\n{chat_history}\n\n[현재 질문]\n{query}")
         ])
         chain = prompt | llm
-        response = await chain.ainvoke({"query": query})
+        response = await chain.ainvoke({"query": query, "chat_history": chat_history})
         return response.content
 
 async def general_node(state: GraphState) -> dict:
@@ -58,7 +58,14 @@ async def general_node(state: GraphState) -> dict:
     messages = state.get("messages", [])
     query = messages[-1].content if messages else ""
 
-    generated_answer = await generate_general_answer(query)  # [FIX] async
+    # [Memory Injection] 이전 대화 기록 확보
+    history_msgs = messages[:-1]
+    chat_history = "\n".join([
+        f"{'사용자' if msg.type == 'human' else 'AI'}: {msg.content}"
+        for msg in history_msgs
+    ]) if history_msgs else "이전 대화 없음"
+
+    generated_answer = await generate_general_answer(query, chat_history)
 
     return {
         "generated_answer": generated_answer,

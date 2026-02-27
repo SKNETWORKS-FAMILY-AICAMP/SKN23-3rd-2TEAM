@@ -92,7 +92,7 @@ elif menu == "Jargon DB Editor":
         
         # 데이터 출력 및 편집
         st.info(f"현재 {len(df_jargon)}개의 은어가 등록되어 있습니다.")
-        edited_df = st.data_editor(df_jargon, num_rows="dynamic", use_container_width=True, key="jargon_editor")
+        edited_df = st.data_editor(df_jargon, num_rows="dynamic", width="stretch", key="jargon_editor")
         
         if st.button("Save Changes to AWS RDS"):
             try:
@@ -134,7 +134,7 @@ elif menu == "Fallback Analysis":
             df_fallback = pd.DataFrame(fallbacks)
             
             st.subheader("미답변 쿼리 리스트")
-            st.dataframe(df_fallback, use_container_width=True)
+            st.dataframe(df_fallback, width="stretch")
             
             # 간단한 시각화 (도메인별 실패 빈도 등)
             if "category" in df_fallback.columns:

@@ -2,7 +2,6 @@
 import pickle
 import time
 import re
-import json
 from typing import List
 
 from langchain_community.retrievers import BM25Retriever
@@ -30,52 +29,32 @@ def korean_custom_preprocess(text: str) -> List[str]:
     text = re.sub(r'[^\\uac00-\\ud7a3A-Za-z0-9]', ' ', text)
     return text.split()
 
-
-def _doc_fingerprint(doc: Document) -> str:
-    payload = {
-        "page_content": doc.page_content,
-        "metadata": doc.metadata or {},
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
-
-
-def _atomic_dump_bm25_cache(retriever: BM25Retriever) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = BM25_CACHE_PATH.with_suffix(BM25_CACHE_PATH.suffix + ".tmp")
-    with open(tmp_path, "wb") as f:
-        pickle.dump(retriever, f)
-    os.replace(tmp_path, BM25_CACHE_PATH)
-
-
-def _load_cached_bm25_from_memory_or_file() -> BM25Retriever | None:
-    global CACHED_BM25_RETRIEVER
-    if CACHED_BM25_RETRIEVER is not None:
-        return CACHED_BM25_RETRIEVER
-    if BM25_CACHE_PATH.exists():
-        with open(BM25_CACHE_PATH, "rb") as f:
-            CACHED_BM25_RETRIEVER = pickle.load(f)
-        return CACHED_BM25_RETRIEVER
-    return None
-
-def _load_or_create_bm25_retriever(vector_store):
+def _load_or_create_bm25_retriever(vector_store, force_refresh: bool = False):
     """
     BM25 ?귐뗫뱜?귐됱쒔??筌롫뗀?덄뵳?Singleton) -> 筌?Ŋ?????뵬 -> RDS ??뽰몵嚥?嚥≪뮆諭??몃빍??
     """
     global CACHED_BM25_RETRIEVER
     
-    if CACHED_BM25_RETRIEVER is not None:
+    if CACHED_BM25_RETRIEVER is not None and not force_refresh:
         return CACHED_BM25_RETRIEVER
 
     if not CACHE_DIR.exists():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    if BM25_CACHE_PATH.exists():
-        print(f"[BM25] Loading cache from file: {BM25_CACHE_PATH}")
+    if BM25_CACHE_PATH.exists() and not force_refresh:
+        print(f"📦 BM25 인덱스 캐시 로드 중 (File): {BM25_CACHE_PATH}")
         with open(BM25_CACHE_PATH, "rb") as f:
             CACHED_BM25_RETRIEVER = pickle.load(f)
             return CACHED_BM25_RETRIEVER
+            
+    if force_refresh and BM25_CACHE_PATH.exists():
+        try:
+            BM25_CACHE_PATH.unlink()
+            print("🗑️ 기존 BM25 캐시 파일을 삭제했습니다.")
+        except Exception as e:
+            pass
     
-    print("[BM25] Cache not found. Building index from RDS documents...")
+    print("⚠️ BM25 캐시가 없습니다. RDS에서 모든 문서를 로드하여 인덱스를 생성합니다.")
     start_time = time.time()
     
     try:
@@ -103,103 +82,6 @@ def _load_or_create_bm25_retriever(vector_store):
     except Exception as e:
         print(f"[BM25] Index build failed: {e}")
         raise e
-
-def update_bm25_cache_for_uploaded_source(
-    uploaded_docs: List[Document],
-    *,
-    source_file: str | None = None,
-) -> dict[str, object]:
-    """
-    Incrementally update the local BM25 cache by replacing documents for one source_file.
-
-    This avoids a full RDS download during admin uploads. It only reads/writes the local
-    `bm25_retriever.pkl` and swaps the chunks for the uploaded file.
-    """
-    global CACHED_BM25_RETRIEVER
-
-    clean_docs = [
-        doc for doc in (uploaded_docs or [])
-        if isinstance(doc, Document) and isinstance(doc.page_content, str) and doc.page_content.strip()
-    ]
-    if not clean_docs:
-        return {
-            "bm25_cache_updated": False,
-            "bm25_status": "skipped_empty_upload",
-            "bm25_total_docs": None,
-            "bm25_source_docs": 0,
-            "bm25_prev_source_docs": None,
-        }
-
-    if source_file is None:
-        source_values = {
-            str((doc.metadata or {}).get("source_file", "")).strip()
-            for doc in clean_docs
-        }
-        source_values.discard("")
-        if len(source_values) == 1:
-            source_file = next(iter(source_values))
-
-    source_file = (source_file or "").strip()
-    if not source_file:
-        return {
-            "bm25_cache_updated": False,
-            "bm25_status": "skipped_missing_source_file",
-            "bm25_total_docs": None,
-            "bm25_source_docs": len(clean_docs),
-            "bm25_prev_source_docs": None,
-        }
-
-    cached = _load_cached_bm25_from_memory_or_file()
-    if cached is None:
-        return {
-            "bm25_cache_updated": False,
-            "bm25_status": "skipped_cache_not_found",
-            "bm25_total_docs": None,
-            "bm25_source_docs": len(clean_docs),
-            "bm25_prev_source_docs": None,
-        }
-
-    cached_docs = list(getattr(cached, "docs", []) or [])
-    unaffected_docs: list[Document] = []
-    prev_source_docs: list[Document] = []
-    for doc in cached_docs:
-        meta = getattr(doc, "metadata", {}) or {}
-        if str(meta.get("source_file", "")).strip() == source_file:
-            prev_source_docs.append(doc)
-        else:
-            unaffected_docs.append(doc)
-
-    prev_fingerprints = sorted(_doc_fingerprint(doc) for doc in prev_source_docs)
-    new_fingerprints = sorted(_doc_fingerprint(doc) for doc in clean_docs)
-    if prev_fingerprints == new_fingerprints:
-        return {
-            "bm25_cache_updated": False,
-            "bm25_status": "no_change",
-            "bm25_total_docs": len(cached_docs),
-            "bm25_source_docs": len(clean_docs),
-            "bm25_prev_source_docs": len(prev_source_docs),
-        }
-
-    merged_docs = unaffected_docs + clean_docs
-    preprocess_func = getattr(cached, "preprocess_func", None) or korean_custom_preprocess
-    k_value = int(getattr(cached, "k", 5) or 5)
-
-    rebuilt = BM25Retriever.from_documents(
-        merged_docs,
-        preprocess_func=preprocess_func,
-    )
-    rebuilt.k = k_value
-    _atomic_dump_bm25_cache(rebuilt)
-    CACHED_BM25_RETRIEVER = rebuilt
-
-    return {
-        "bm25_cache_updated": True,
-        "bm25_status": "updated",
-        "bm25_total_docs": len(merged_docs),
-        "bm25_source_docs": len(clean_docs),
-        "bm25_prev_source_docs": len(prev_source_docs),
-    }
-
 
 def get_hybrid_retriever(
     query: str = "",
@@ -248,3 +130,97 @@ def get_hybrid_retriever(
     
     print(f"[Retriever] Hybrid retriever ready (weights: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
     return ensemble_retriever
+
+def refresh_bm25_index():
+    """관리자 PDF 업로드 후 BM25 캐시 및 메모리 상주 객체를 강제로 초기화 및 재구축합니다."""
+    global CACHED_BM25_RETRIEVER
+    print("🔄 BM25 인덱스 전격 강제 초기화 (Refresh) 시작...")
+    CACHED_BM25_RETRIEVER = None
+    
+    from app.vectorstore.pgvector_store import get_vector_store
+    from app.vectorstore.pgvector_store import PGVectorStoreManager
+    
+    with PGVectorStoreManager() as _:
+        vs = get_vector_store(collection_name=COLLECTION_NAME)
+        _load_or_create_bm25_retriever(vs, force_refresh=True)
+    
+    print("✅ BM25 인덱스 글로벌 리프레시 완료!")
+
+def update_bm25_cache_for_uploaded_source(source_keys: List[str]):
+    """
+    관리자 PDF 업로드 시 새로 추가되거나 삭제된 문서만 캐시에 반영하여 
+    RDS 전체 로드를 방지하는 준-증분 업데이트 로직
+    """
+    global CACHED_BM25_RETRIEVER
+    if not source_keys:
+        return
+        
+    print(f"⚡ [BM25] 준-증분 업데이트 시도: {source_keys}")
+    
+    try:
+        from app.vectorstore.pgvector_store import get_vector_store
+        vs = get_vector_store(collection_name=COLLECTION_NAME)
+        
+        # 1. 파일이 존재하는지 확인하고 기존 캐시 로드 시도
+        if CACHED_BM25_RETRIEVER is None:
+            # 캐시가 아예 메모리에 없으면(처음 올렸을 때 등) load_or_create 를 탄다.
+            # 이 경우 전체 갱신이 일어날 수도 있지만, 이미 존재하는 파일이 없을 경우 대비
+            if not BM25_CACHE_PATH.exists():
+                 print("⚠️ 기존 BM25 캐시가 없어 기본 리프레시를 수행합니다.")
+                 refresh_bm25_index()
+                 return
+                 
+            with open(BM25_CACHE_PATH, "rb") as f:
+                 CACHED_BM25_RETRIEVER = pickle.load(f)
+                 
+        if CACHED_BM25_RETRIEVER is None:
+             refresh_bm25_index()
+             return
+             
+        # 기존 문서 보존하면서 삭제된 소스를 필터링
+        print(f"🗑️ [BM25] 기존 인덱스에서 삭제 및 업데이트 대상 필터링 중...")
+        filtered_docs = []
+        for d in CACHED_BM25_RETRIEVER.docs:
+            if d.metadata and d.metadata.get("source_key") not in source_keys and d.metadata.get("source_file", "").replace(".md", ".pdf") not in source_keys:
+               filtered_docs.append(d)
+               
+        # 새로운 문서 가져오기 (RDS 활용)
+        print(f"📥 [BM25] RDS에서 새로운({len(source_keys)}개 소스) 청크 로딩 중...")
+        new_docs = []
+        # source_key 로 메타데이터 필터링하여 가져온다. langchain-pgvector의 search 방식 활용
+        # 모든 청크를 가져오려면 비어있는 query를 사용하고 filter 적용
+        for source_key in source_keys:
+             source_md = source_key.replace(".pdf", ".md")
+             # Try matching "source_file" in metadata
+             docs = vs.similarity_search("", k=10000, filter={"source_file": source_md})
+             new_docs.extend(docs)
+             
+        # 만약 못가져온게 있다면 source_key 로도 시도 (혹시 cmetadata 구조 다름 대비)
+        if not new_docs:
+             for source_key in source_keys:
+                  docs = vs.similarity_search("", k=10000, filter={"source_key": source_key})
+                  new_docs.extend(docs)
+
+        # 합친 후 새로운 인덱스 생성
+        combined_docs = filtered_docs + new_docs
+        print(f"🔄 [BM25] 병합 완료: 총 {len(combined_docs)} 문서를 사용하여 BM25 재구축 연산 시작...")
+        
+        start_time = time.time()
+        new_bm25 = BM25Retriever.from_documents(
+            combined_docs,
+            preprocess_func=korean_custom_preprocess
+        )
+        new_bm25.k = CACHED_BM25_RETRIEVER.k
+        
+        # 캐싱 및 덮어쓰기
+        with open(BM25_CACHE_PATH, "wb") as f:
+            pickle.dump(new_bm25, f)
+            
+        CACHED_BM25_RETRIEVER = new_bm25
+        end_time = time.time()
+        print(f"✅ [BM25] 준-증분 업데이트 완료 ({end_time - start_time:.2f}초 소요)")
+        
+    except Exception as e:
+        print(f"❌ [BM25] 준-증분 업데이트 오류: {e}")
+        print("Fallback으로 전체 초기화를 진행합니다.")
+        refresh_bm25_index()

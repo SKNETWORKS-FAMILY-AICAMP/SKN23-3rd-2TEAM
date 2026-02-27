@@ -52,8 +52,8 @@ def _get_conn_info():
         host = "127.0.0.1"
         port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
 
-    keepalives = "keepalives=1 keepalives_idle=60 keepalives_interval=10 keepalives_count=5"
-    return f"host={host} user={user} password={pw} dbname={db} port={port} sslmode=require {keepalives}"
+    keepalives = "keepalives=1 keepalives_idle=60 keepalives_interval=10 keepalives_count=5 connect_timeout=5"
+    return f"host={host} user={user} password={pw} dbname={db} port={port} {keepalives}"
 
 
 def get_memory_saver():
