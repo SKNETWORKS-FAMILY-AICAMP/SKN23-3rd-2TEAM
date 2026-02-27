@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -16,6 +16,7 @@ from app.vectorstore.pgvector_store import PGVectorStoreManager
 
 
 REGISTRY_TABLE = "admin_pdf_ingest_registry"
+USE_YN_COLUMN_READY = False
 
 
 def _slugify_filename(filename: str) -> str:
@@ -64,6 +65,38 @@ def _ensure_registry_table() -> None:
                 cur.execute(create_table_sql)
                 cur.execute(create_index_sql)
             conn.commit()
+
+
+def _ensure_use_yn_column() -> None:
+    """
+    langchain_pg_embedding.use_yn 컬럼과 기본값을 보장합니다.
+    대량 데이터 백필은 운영 SQL로 별도 수행합니다.
+    """
+    global USE_YN_COLUMN_READY
+    if USE_YN_COLUMN_READY:
+        return
+
+    with open_optional_ssh_tunnel() as tunnel:
+        conn_args = get_connection_kwargs()
+        if tunnel:
+            conn_args["host"] = tunnel["host"]
+            conn_args["port"] = tunnel["port"]
+        with psycopg2.connect(**conn_args) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    ALTER TABLE langchain_pg_embedding
+                    ADD COLUMN IF NOT EXISTS use_yn CHAR(1);
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE langchain_pg_embedding
+                    ALTER COLUMN use_yn SET DEFAULT 'Y';
+                    """
+                )
+            conn.commit()
+    USE_YN_COLUMN_READY = True
 
 
 def _fetch_existing_registry(collection_name: str, source_key: str) -> dict[str, dict[str, Any]]:
@@ -194,6 +227,167 @@ def get_all_registry_documents(collection_name: str = "welding_robotics_manuals"
     ]
 
 
+def search_embedding_sources(
+    *,
+    collection_name: str = "welding_robotics_manuals",
+    file_name: Optional[str] = None,
+    creator: Optional[str] = None,
+    uploaded_date: Optional[str] = None,
+    use_yn: str = "ALL",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    source_key(파일) 단위로 임베딩 상태를 조회합니다.
+    검색 조건: 파일명, creator 컬럼, created_at 컬럼 날짜(YYYY-MM-DD), use_yn(Y/N/ALL)
+    """
+    _ensure_use_yn_column()
+    limit = max(1, min(int(limit or 200), 1000))
+
+    source_expr = """
+        COALESCE(
+            NULLIF(BTRIM(e.cmetadata->>'source_file'), ''),
+            NULLIF(BTRIM(e.cmetadata->>'source_key'), ''),
+            NULLIF(BTRIM(e.cmetadata->>'source'), ''),
+            e.custom_id
+        )
+    """
+
+    filters: list[str] = ["c.name = %s"]
+    params: list[Any] = [collection_name]
+
+    if file_name and file_name.strip():
+        filters.append(f"LOWER({source_expr}) LIKE LOWER(%s)")
+        params.append(f"%{file_name.strip()}%")
+
+    if creator and creator.strip():
+        filters.append("LOWER(COALESCE(NULLIF(BTRIM(e.creator), ''), '')) LIKE LOWER(%s)")
+        params.append(f"%{creator.strip()}%")
+
+    normalized_use_yn = (use_yn or "ALL").strip().upper()
+    if normalized_use_yn in {"Y", "N"}:
+        filters.append("COALESCE(e.use_yn, 'Y') = %s")
+        params.append(normalized_use_yn)
+
+    upload_date_obj: Optional[date] = None
+    if uploaded_date and uploaded_date.strip():
+        upload_date_obj = datetime.strptime(uploaded_date.strip(), "%Y-%m-%d").date()
+        filters.append("DATE(e.created_at) = %s")
+        params.append(upload_date_obj)
+
+    where_sql = " AND ".join(filters)
+
+    query = f"""
+        SELECT
+            {source_expr} AS source_key,
+            COUNT(*) AS chunk_count,
+            SUM(CASE WHEN COALESCE(e.use_yn, 'Y') = 'Y' THEN 1 ELSE 0 END) AS active_chunks,
+            SUM(CASE WHEN COALESCE(e.use_yn, 'Y') = 'N' THEN 1 ELSE 0 END) AS inactive_chunks,
+            COALESCE(MAX(NULLIF(BTRIM(e.creator), '')), 'admin') AS creator,
+            MAX(e.created_at) AS uploaded_at,
+            CASE
+                WHEN SUM(CASE WHEN COALESCE(e.use_yn, 'Y') = 'Y' THEN 1 ELSE 0 END) = 0 THEN 'N'
+                ELSE 'Y'
+            END AS use_yn
+        FROM langchain_pg_embedding e
+        JOIN langchain_pg_collection c
+          ON e.collection_id = c.uuid
+        WHERE {where_sql}
+        GROUP BY 1
+        ORDER BY uploaded_at DESC NULLS LAST, source_key ASC
+        LIMIT %s
+    """
+
+    with open_optional_ssh_tunnel() as tunnel:
+        conn_args = get_connection_kwargs()
+        if tunnel:
+            conn_args["host"] = tunnel["host"]
+            conn_args["port"] = tunnel["port"]
+        with psycopg2.connect(**conn_args) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, [*params, limit])
+                rows = cur.fetchall()
+
+    return [
+        {
+            "source_key": row[0],
+            "chunk_count": int(row[1] or 0),
+            "active_chunks": int(row[2] or 0),
+            "inactive_chunks": int(row[3] or 0),
+            "creator": row[4] or "admin",
+            "uploaded_at": row[5],
+            "use_yn": row[6] or "Y",
+        }
+        for row in rows
+    ]
+
+
+def set_use_yn_by_sources(
+    *,
+    source_keys: list[str],
+    use_yn: str,
+    collection_name: str = "welding_robotics_manuals",
+) -> dict[str, Any]:
+    """
+    source_key 단위로 langchain_pg_embedding.use_yn 상태를 일괄 업데이트합니다.
+    """
+    _ensure_use_yn_column()
+
+    normalized = (use_yn or "").strip().upper()
+    if normalized not in {"Y", "N"}:
+        raise ValueError("use_yn 값은 'Y' 또는 'N' 이어야 합니다.")
+
+    clean_keys = [k.strip() for k in (source_keys or []) if isinstance(k, str) and k.strip()]
+    if not clean_keys:
+        return {"updated_chunks": 0, "target_sources": 0, "use_yn": normalized}
+
+    source_expr = """
+        COALESCE(
+            NULLIF(BTRIM(e.cmetadata->>'source_file'), ''),
+            NULLIF(BTRIM(e.cmetadata->>'source_key'), ''),
+            NULLIF(BTRIM(e.cmetadata->>'source'), ''),
+            e.custom_id
+        )
+    """
+
+    with open_optional_ssh_tunnel() as tunnel:
+        conn_args = get_connection_kwargs()
+        if tunnel:
+            conn_args["host"] = tunnel["host"]
+            conn_args["port"] = tunnel["port"]
+        with psycopg2.connect(**conn_args) as conn:
+            with conn.cursor() as cur:
+                update_sql = (
+                    """
+                    UPDATE langchain_pg_embedding e
+                    SET use_yn = %s,
+                        cmetadata = jsonb_set(
+                            COALESCE(e.cmetadata, '{}'::jsonb),
+                            '{use_yn}',
+                            to_jsonb(%s::text),
+                            true
+                        )
+                    FROM langchain_pg_collection c
+                    WHERE e.collection_id = c.uuid
+                      AND c.name = %s
+                      AND """
+                    + source_expr
+                    + """ = ANY(%s)
+                    """
+                )
+                cur.execute(
+                    update_sql,
+                    (normalized, normalized, collection_name, clean_keys),
+                )
+                updated_chunks = cur.rowcount
+            conn.commit()
+
+    return {
+        "updated_chunks": int(updated_chunks or 0),
+        "target_sources": len(clean_keys),
+        "use_yn": normalized,
+    }
+
+
 def delete_registry_documents_by_sources(source_keys: list[str], collection_name: str = "welding_robotics_manuals") -> dict[str, Any]:
     if not source_keys:
         return {"deleted_chunks": 0, "s3_keys_to_delete": []}
@@ -308,7 +502,13 @@ def _update_vector_audit_columns(
                     """
                     UPDATE langchain_pg_embedding e
                     SET created_at = %s,
-                        creator = %s
+                        creator = %s,
+                        cmetadata = jsonb_set(
+                            COALESCE(e.cmetadata, '{}'::jsonb),
+                            '{use_yn}',
+                            to_jsonb('Y'::text),
+                            true
+                        )
                     FROM langchain_pg_collection c
                     WHERE e.collection_id = c.uuid
                       AND c.name = %s
@@ -367,6 +567,7 @@ def incremental_embed_markdown_to_pgvector(
                         cmetadata[k] = str(v)
             except json.JSONDecodeError:
                 pass
+        cmetadata["use_yn"] = "Y"
                 
         chunk_hash = _sha256_text(f"{chapter_path}\n{doc.page_content}")
         chunk_id = _sha256_text(f"{source_key}\n{chunk_hash}")

@@ -1,6 +1,8 @@
 import os
 import sys
 import torch
+import json
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,8 +56,111 @@ def get_device():
     return "cpu"
 
 # 3. 모델 설정
-MODEL_FAST = "gpt-5.2"      # 쿼리 재작성, 분류, 검증 (Speed)
-MODEL_ACCURATE = "gpt-5.2"      # 실제 답변 생성 (Accuracy)
+MODEL_CONFIG_PATH = DATA_DIR / "runtime_model_config.json"
+
+SUPPORTED_CHAT_MODELS = [
+    "gpt-5.2",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o",
+    "gpt-4o-mini",
+]
+
+DEFAULT_MODEL_FAST = os.getenv("MODEL_FAST", "gpt-5.2")      # 쿼리 재작성, 분류, 검증 (Speed)
+DEFAULT_MODEL_ACCURATE = os.getenv("MODEL_ACCURATE", "gpt-5.2")  # 실제 답변 생성 (Accuracy)
+
+_MODEL_CONFIG_LOCK = threading.Lock()
+_MODEL_CONFIG_CACHE: dict | None = None
+
+
+def _normalize_model_name(model_name: str) -> str:
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("모델명은 비어 있을 수 없습니다.")
+    return model_name.strip()
+
+
+def _validate_model_name(model_name: str) -> str:
+    name = _normalize_model_name(model_name)
+    if name not in SUPPORTED_CHAT_MODELS and not name.startswith("gpt-"):
+        print(f"⚠️ 권장 모델 목록 외 모델명이 설정되었습니다: {name}")
+    return name
+
+
+def _default_model_settings() -> dict:
+    return {
+        "model_fast": _validate_model_name(DEFAULT_MODEL_FAST),
+        "model_accurate": _validate_model_name(DEFAULT_MODEL_ACCURATE),
+    }
+
+
+def _read_model_settings_from_disk() -> dict:
+    settings = _default_model_settings()
+    if not MODEL_CONFIG_PATH.exists():
+        return settings
+
+    try:
+        payload = json.loads(MODEL_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw_fast = payload.get("model_fast", settings["model_fast"])
+        raw_accurate = payload.get("model_accurate", settings["model_accurate"])
+        settings["model_fast"] = _validate_model_name(raw_fast)
+        settings["model_accurate"] = _validate_model_name(raw_accurate)
+    except Exception as e:
+        print(f"⚠️ 모델 설정 파일 로드 실패. 기본값으로 복구합니다: {e}")
+
+    return settings
+
+
+def _persist_model_settings(settings: dict) -> None:
+    MODEL_CONFIG_PATH.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _get_model_settings_cached() -> dict:
+    global _MODEL_CONFIG_CACHE
+    with _MODEL_CONFIG_LOCK:
+        if _MODEL_CONFIG_CACHE is None:
+            _MODEL_CONFIG_CACHE = _read_model_settings_from_disk()
+        return dict(_MODEL_CONFIG_CACHE)
+
+
+def get_model_settings() -> dict:
+    return _get_model_settings_cached()
+
+
+def list_available_chat_models() -> list[str]:
+    return list(SUPPORTED_CHAT_MODELS)
+
+
+def set_model_settings(model_fast: str | None = None, model_accurate: str | None = None) -> dict:
+    global _MODEL_CONFIG_CACHE, MODEL_FAST, MODEL_ACCURATE
+    with _MODEL_CONFIG_LOCK:
+        current = _MODEL_CONFIG_CACHE or _read_model_settings_from_disk()
+        next_settings = {
+            "model_fast": _validate_model_name(model_fast or current["model_fast"]),
+            "model_accurate": _validate_model_name(model_accurate or current["model_accurate"]),
+        }
+        _persist_model_settings(next_settings)
+        _MODEL_CONFIG_CACHE = next_settings
+        MODEL_FAST = next_settings["model_fast"]
+        MODEL_ACCURATE = next_settings["model_accurate"]
+        return dict(next_settings)
+
+
+def get_model_fast() -> str:
+    return _get_model_settings_cached()["model_fast"]
+
+
+def get_model_accurate() -> str:
+    return _get_model_settings_cached()["model_accurate"]
+
+
+# 하위 호환용 전역 상수(기존 import 경로 유지)
+MODEL_FAST = get_model_fast()
+MODEL_ACCURATE = get_model_accurate()
 
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 RERANKER_LOCAL_PATH = MODELS_DIR / "bge-reranker-v2-m3"

@@ -1,0 +1,250 @@
+﻿import os
+import pickle
+import time
+import re
+import json
+from typing import List
+
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers.ensemble import EnsembleRetriever
+from langchain_core.documents import Document
+
+from app.vectorstore.pgvector_store import PGVectorStoreManager
+
+from app.core.config import (
+    CACHE_DIR, COLLECTION_NAME, 
+    DEFAULT_VECTOR_WEIGHT, DEFAULT_BM25_WEIGHT, TECHNICAL_BM25_WEIGHT
+)
+
+BM25_CACHE_PATH = CACHE_DIR / "bm25_retriever.pkl"
+CACHED_BM25_RETRIEVER = None
+
+def korean_custom_preprocess(text: str) -> List[str]:
+    """
+    [異붽??? ?쒓? 議곗궗 諛??뱀닔湲고샇濡??명빐 ?곸뼱/?レ옄 ?먮윭肄붾뱶媛 留ㅼ묶?섏? ?딅뒗 ?꾩긽 諛⑹?
+    ?? "M0042媛" -> "M0042 媛" 濡?遺꾨━?????덈룄濡??뱀닔湲고샇 ?뺤젣 ???꾩뼱?곌린 湲곗? 遺꾨━
+    """
+    if not isinstance(text, str):
+        return []
+    # ?쒓?, ?곷Ц, ?レ옄瑜??쒖쇅??紐⑤뱺 ?뱀닔湲고샇瑜?怨듬갚?쇰줈 移섑솚
+    text = re.sub(r'[^媛-?쥱-Za-z0-9]', ' ', text)
+    return text.split()
+
+
+def _doc_fingerprint(doc: Document) -> str:
+    payload = {
+        "page_content": doc.page_content,
+        "metadata": doc.metadata or {},
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _atomic_dump_bm25_cache(retriever: BM25Retriever) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = BM25_CACHE_PATH.with_suffix(BM25_CACHE_PATH.suffix + ".tmp")
+    with open(tmp_path, "wb") as f:
+        pickle.dump(retriever, f)
+    os.replace(tmp_path, BM25_CACHE_PATH)
+
+
+def _load_cached_bm25_from_memory_or_file() -> BM25Retriever | None:
+    global CACHED_BM25_RETRIEVER
+    if CACHED_BM25_RETRIEVER is not None:
+        return CACHED_BM25_RETRIEVER
+    if BM25_CACHE_PATH.exists():
+        with open(BM25_CACHE_PATH, "rb") as f:
+            CACHED_BM25_RETRIEVER = pickle.load(f)
+        return CACHED_BM25_RETRIEVER
+    return None
+
+def _load_or_create_bm25_retriever(vector_store):
+    """
+    BM25 由ы듃由щ쾭瑜?硫붾え由?Singleton) -> 罹먯떆 ?뚯씪 -> RDS ?쒖쑝濡?濡쒕뱶?⑸땲??
+    """
+    global CACHED_BM25_RETRIEVER
+    
+    if CACHED_BM25_RETRIEVER is not None:
+        return CACHED_BM25_RETRIEVER
+
+    if not CACHE_DIR.exists():
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if BM25_CACHE_PATH.exists():
+        print(f"?벀 BM25 ?몃뜳??罹먯떆 濡쒕뱶 以?(File): {BM25_CACHE_PATH}")
+        with open(BM25_CACHE_PATH, "rb") as f:
+            CACHED_BM25_RETRIEVER = pickle.load(f)
+            return CACHED_BM25_RETRIEVER
+    
+    print("?좑툘 BM25 罹먯떆媛 ?놁뒿?덈떎. RDS?먯꽌 紐⑤뱺 臾몄꽌瑜?濡쒕뱶?섏뿬 ?몃뜳?ㅻ? ?앹꽦?⑸땲??")
+    start_time = time.time()
+    
+    try:
+        # RDS?먯꽌 紐⑤뱺 臾몄꽌 媛?몄삤湲?(?꾨웾 濡쒕뱶)
+        # 二쇱쓽: 鍮?臾몄옄??寃?됱씠 ?쇰? ?꾨쿋??紐⑤뜽?먯꽌 遺덉븞?뺥븷 寃쎌슦 vector_store.get() ???쒖슜 沅뚯옣
+        all_docs = vector_store.similarity_search("", k=100000)
+        print(f"?뱷 {len(all_docs)}媛쒖쓽 臾몄꽌瑜?濡쒕뱶?덉뒿?덈떎. BM25 ?몃뜳???쒖옉...")
+        
+        # [?섏젙?? 而ㅼ뒪? ?꾩쿂由??⑥닔(korean_custom_preprocess) ?곸슜
+        bm25_retriever = BM25Retriever.from_documents(
+            all_docs,
+            preprocess_func=korean_custom_preprocess
+        )
+        bm25_retriever.k = 5
+        
+        # 罹먯떆?????
+        with open(BM25_CACHE_PATH, "wb") as f:
+            pickle.dump(bm25_retriever, f)
+            
+        CACHED_BM25_RETRIEVER = bm25_retriever
+        end_time = time.time()
+        print(f"??BM25 ?몃뜳???앹꽦 諛?罹먯떆 ????꾨즺 ({end_time - start_time:.2f}珥??뚯슂)")
+        return CACHED_BM25_RETRIEVER
+        
+    except Exception as e:
+        print(f"??BM25 ?몃뜳???앹꽦 ?ㅽ뙣: {e}")
+        raise e
+
+def update_bm25_cache_for_uploaded_source(
+    uploaded_docs: List[Document],
+    *,
+    source_file: str | None = None,
+) -> dict[str, object]:
+    """
+    Incrementally update the local BM25 cache by replacing documents for one source_file.
+
+    This avoids a full RDS download during admin uploads. It only reads/writes the local
+    `bm25_retriever.pkl` and swaps the chunks for the uploaded file.
+    """
+    global CACHED_BM25_RETRIEVER
+
+    clean_docs = [
+        doc for doc in (uploaded_docs or [])
+        if isinstance(doc, Document) and isinstance(doc.page_content, str) and doc.page_content.strip()
+    ]
+    if not clean_docs:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_empty_upload",
+            "bm25_total_docs": None,
+            "bm25_source_docs": 0,
+            "bm25_prev_source_docs": None,
+        }
+
+    if source_file is None:
+        source_values = {
+            str((doc.metadata or {}).get("source_file", "")).strip()
+            for doc in clean_docs
+        }
+        source_values.discard("")
+        if len(source_values) == 1:
+            source_file = next(iter(source_values))
+
+    source_file = (source_file or "").strip()
+    if not source_file:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_missing_source_file",
+            "bm25_total_docs": None,
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": None,
+        }
+
+    cached = _load_cached_bm25_from_memory_or_file()
+    if cached is None:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "skipped_cache_not_found",
+            "bm25_total_docs": None,
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": None,
+        }
+
+    cached_docs = list(getattr(cached, "docs", []) or [])
+    unaffected_docs: list[Document] = []
+    prev_source_docs: list[Document] = []
+    for doc in cached_docs:
+        meta = getattr(doc, "metadata", {}) or {}
+        if str(meta.get("source_file", "")).strip() == source_file:
+            prev_source_docs.append(doc)
+        else:
+            unaffected_docs.append(doc)
+
+    prev_fingerprints = sorted(_doc_fingerprint(doc) for doc in prev_source_docs)
+    new_fingerprints = sorted(_doc_fingerprint(doc) for doc in clean_docs)
+    if prev_fingerprints == new_fingerprints:
+        return {
+            "bm25_cache_updated": False,
+            "bm25_status": "no_change",
+            "bm25_total_docs": len(cached_docs),
+            "bm25_source_docs": len(clean_docs),
+            "bm25_prev_source_docs": len(prev_source_docs),
+        }
+
+    merged_docs = unaffected_docs + clean_docs
+    preprocess_func = getattr(cached, "preprocess_func", None) or korean_custom_preprocess
+    k_value = int(getattr(cached, "k", 5) or 5)
+
+    rebuilt = BM25Retriever.from_documents(
+        merged_docs,
+        preprocess_func=preprocess_func,
+    )
+    rebuilt.k = k_value
+    _atomic_dump_bm25_cache(rebuilt)
+    CACHED_BM25_RETRIEVER = rebuilt
+
+    return {
+        "bm25_cache_updated": True,
+        "bm25_status": "updated",
+        "bm25_total_docs": len(merged_docs),
+        "bm25_source_docs": len(clean_docs),
+        "bm25_prev_source_docs": len(prev_source_docs),
+    }
+
+
+def get_hybrid_retriever(
+    query: str = "",
+    collection_name: str = COLLECTION_NAME, 
+    vector_weight: float = None, 
+    bm25_weight: float = None,
+    k: int = 3  # default per-retriever candidate count
+):
+    """
+    Vector Search (RDS)? BM25 (Local Cache)瑜?寃고빀???섏씠釉뚮━??由ы듃由щ쾭瑜?諛섑솚?⑸땲??
+    吏덈Ц??湲곗닠 ?⑹뼱(?먮윭肄붾뱶, 紐⑤뜽紐? ?ы븿 ??BM25 媛以묒튂瑜??숈쟻?쇰줈 ?곹뼢?⑸땲??
+    """
+    # 0. ?숈쟻 媛以묒튂 寃곗젙
+    # [?섏젙?? ?꾨씫?섏뿀???ㅼ썙??異붽? (TP630, RB10 ??
+    tech_keywords = ["HH", "HI5", "HI6", "UR10", "UR5", "UR3", "DX100", "YRC1000", "TP630", "RB10"]
+    
+    # [?섏젙?? ?뚰뙆踰??レ옄 議고빀(?? Hi5, M0042) ?먮뒗 4?먮━ ?댁긽???곗냽???レ옄(?? 4107, 38013) 媛먯?
+    regex_pattern = r'[A-Za-z]+\d+|\d{4,}'
+    
+    is_technical = any(kw in query.upper() for kw in tech_keywords) or bool(re.search(regex_pattern, query))
+    
+    if bm25_weight is None:
+        bm25_weight = TECHNICAL_BM25_WEIGHT if is_technical else DEFAULT_BM25_WEIGHT
+    if vector_weight is None:
+        vector_weight = (1.0 - bm25_weight)
+        
+    if is_technical:
+        print(f"?뵇 湲곗닠 ?⑹뼱 媛먯?????BM25 媛以묒튂 ?곹뼢 ({bm25_weight})")
+    
+    print("?? ?섏씠釉뚮━??由ы듃由щ쾭 珥덇린??以?..")
+    
+    # 1. 踰≫꽣 由ы듃由щ쾭 ?ㅼ젙 (RDS pgvector)
+    from app.vectorstore.pgvector_store import get_vector_store
+    vector_store = get_vector_store(collection_name=collection_name)
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
+
+    # 2. BM25 由ы듃由щ쾭 ?ㅼ젙
+    bm25_retriever = _load_or_create_bm25_retriever(vector_store)
+    bm25_retriever.k = k
+
+    # 3. ?숈긽釉?由ы듃由щ쾭 援ъ꽦
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[vector_retriever, bm25_retriever],
+        weights=[vector_weight, bm25_weight]
+    )
+    
+    print(f"???섏씠釉뚮━??由ы듃由щ쾭 以鍮??꾨즺 (媛以묒튂: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
+    return ensemble_retriever
