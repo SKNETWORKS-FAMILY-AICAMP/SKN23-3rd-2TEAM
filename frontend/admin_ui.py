@@ -258,7 +258,7 @@ def show_admin_page():
             search_query = st.text_input("질문 검색")
 
             if search_query:
-                df = df[df["question"].str.contains(search_query, case=False)]
+                df = df[df["query"].str.contains(search_query, case=False)]
 
             st.dataframe(df, use_container_width=True)
 
