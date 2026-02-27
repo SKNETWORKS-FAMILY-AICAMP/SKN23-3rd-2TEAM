@@ -48,19 +48,11 @@ app.include_router(chat_router)
 DEVICE = "cpu"
 
 async def debug_system():
-<<<<<<< HEAD
-    """Run startup diagnostics for core components."""
-    print("\n" + "="*50)
-    print("[System Debug] Starting Production Check...")
-    
-    # 1. Environment variable checks
-=======
     """서버 시작 전 주요 컴포넌트를 점검합니다."""
     print("\n" + "="*50)
     print("🚀 [System Debug] Starting Production Check...")
     
     # 1. 환경 변수 체크
->>>>>>> develop
     is_valid, err = validate_config()
     if not is_valid:
         print(f"❌ [Config] Failed: {err}")
