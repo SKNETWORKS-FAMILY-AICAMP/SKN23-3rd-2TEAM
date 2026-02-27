@@ -1,4 +1,4 @@
-import os
+﻿import os
 import pickle
 import time
 import re
@@ -20,18 +20,18 @@ CACHED_BM25_RETRIEVER = None
 
 def korean_custom_preprocess(text: str) -> List[str]:
     """
-    [추가됨] 한글 조사 및 특수기호로 인해 영어/숫자 에러코드가 매칭되지 않는 현상 방지
-    예: "M0042가" -> "M0042 가" 로 분리될 수 있도록 특수기호 정제 후 띄어쓰기 기준 분리
+    [?곕떽??? ??? 鈺곌퀣沅?獄??諭?붹묾怨좎깈嚥??紐낅퉸 ?怨몃선/??ъ쁽 ?癒?쑎?꾨뗀諭뜹첎? 筌띲끉臾??? ??낅뮉 ?袁⑷맒 獄쎻뫗?
+    ?? "M0042揶쎛" -> "M0042 揶쎛" 嚥??브쑬???????덈즲嚥??諭?붹묾怨좎깈 ?類ㅼ젫 ???袁⑸선?怨뚮┛ 疫꿸퀣? ?브쑬??
     """
     if not isinstance(text, str):
         return []
-    # 한글, 영문, 숫자를 제외한 모든 특수기호를 공백으로 치환
-    text = re.sub(r'[^가-힣A-Za-z0-9]', ' ', text)
+    # ???, ?怨론? ??ъ쁽????뽰뇚??筌뤴뫀諭??諭?붹묾怨좎깈???⑤벉媛??곗쨮 燁살꼹??
+    text = re.sub(r'[^\\uac00-\\ud7a3A-Za-z0-9]', ' ', text)
     return text.split()
 
 def _load_or_create_bm25_retriever(vector_store, force_refresh: bool = False):
     """
-    BM25 리트리버를 메모리(Singleton) -> 캐시 파일 -> RDS 순으로 로드합니다.
+    BM25 ?귐뗫뱜?귐됱쒔??筌롫뗀?덄뵳?Singleton) -> 筌?Ŋ?????뵬 -> RDS ??뽰몵嚥?嚥≪뮆諭??몃빍??
     """
     global CACHED_BM25_RETRIEVER
     
@@ -58,29 +58,29 @@ def _load_or_create_bm25_retriever(vector_store, force_refresh: bool = False):
     start_time = time.time()
     
     try:
-        # RDS에서 모든 문서 가져오기 (전량 로드)
-        # 주의: 빈 문자열 검색이 일부 임베딩 모델에서 불안정할 경우 vector_store.get() 등 활용 권장
+        # RDS?癒?퐣 筌뤴뫀諭??얜챷苑?揶쎛?紐꾩궎疫?(?袁⑥쎗 嚥≪뮆諭?
+        # 雅뚯눘?? ???얜챷???野꺜??깆뵠 ??? ?袁⑥퓢??筌뤴뫀??癒?퐣 ?븍뜆釉?類λ막 野껋럩??vector_store.get() ????뽰뒠 亦낅슣??
         all_docs = vector_store.similarity_search("", k=100000)
-        print(f"📝 {len(all_docs)}개의 문서를 로드했습니다. BM25 인덱싱 시작...")
+        print(f"[BM25] Loaded {len(all_docs)} docs. Building index...")
         
-        # [수정됨] 커스텀 전처리 함수(korean_custom_preprocess) 적용
+        # [??륁젟?? ?뚣끉??? ?袁⑹퓗????λ땾(korean_custom_preprocess) ?怨몄뒠
         bm25_retriever = BM25Retriever.from_documents(
             all_docs,
             preprocess_func=korean_custom_preprocess
         )
         bm25_retriever.k = 5
         
-        # 캐시에 저장
+        # 筌?Ŋ???????
         with open(BM25_CACHE_PATH, "wb") as f:
             pickle.dump(bm25_retriever, f)
             
         CACHED_BM25_RETRIEVER = bm25_retriever
         end_time = time.time()
-        print(f"✅ BM25 인덱스 생성 및 캐시 저장 완료 ({end_time - start_time:.2f}초 소요)")
+        print(f"[BM25] Index build + cache save complete ({end_time - start_time:.2f}s)")
         return CACHED_BM25_RETRIEVER
         
     except Exception as e:
-        print(f"❌ BM25 인덱스 생성 실패: {e}")
+        print(f"[BM25] Index build failed: {e}")
         raise e
 
 def get_hybrid_retriever(
@@ -88,17 +88,17 @@ def get_hybrid_retriever(
     collection_name: str = COLLECTION_NAME, 
     vector_weight: float = None, 
     bm25_weight: float = None,
-    k: int = 5  # Reranker 부하 감소를 위해 7->5로 최적화
+    k: int = 5  # default per-retriever candidate count
 ):
     """
-    Vector Search (RDS)와 BM25 (Local Cache)를 결합한 하이브리드 리트리버를 반환합니다.
-    질문에 기술 용어(에러코드, 모델명) 포함 시 BM25 가중치를 동적으로 상향합니다.
+    Vector Search (RDS)?? BM25 (Local Cache)??野껉퀬鍮????륁뵠?됰슢????귐뗫뱜?귐됱쒔??獄쏆꼹???몃빍??
+    筌욌뜄揆??疫꿸퀣????밸선(?癒?쑎?꾨뗀諭? 筌뤴뫀?쏙쭗? ??釉???BM25 揶쎛餓λ쵐?귞몴???덉읅??곗쨮 ?怨밸샨??몃빍??
     """
-    # 0. 동적 가중치 결정
-    # [수정됨] 누락되었던 키워드 추가 (TP630, RB10 등)
+    # 0. ??덉읅 揶쎛餓λ쵐??野껉퀣??
+    # [??륁젟?? ?袁⑥뵭??뤿?????쇱뜖???곕떽? (TP630, RB10 ??
     tech_keywords = ["HH", "HI5", "HI6", "UR10", "UR5", "UR3", "DX100", "YRC1000", "TP630", "RB10"]
     
-    # [수정됨] 알파벳+숫자 조합(예: Hi5, M0042) 또는 4자리 이상의 연속된 숫자(예: 4107, 38013) 감지
+    # [??륁젟?? ??곕솁甕???ъ쁽 鈺곌퀬鍮(?? Hi5, M0042) ?癒?뮉 4?癒?봺 ??곴맒???怨쀫꺗????ъ쁽(?? 4107, 38013) 揶쏅Ŋ?
     regex_pattern = r'[A-Za-z]+\d+|\d{4,}'
     
     is_technical = any(kw in query.upper() for kw in tech_keywords) or bool(re.search(regex_pattern, query))
@@ -109,26 +109,26 @@ def get_hybrid_retriever(
         vector_weight = (1.0 - bm25_weight)
         
     if is_technical:
-        print(f"🔍 기술 용어 감지됨 → BM25 가중치 상향 ({bm25_weight})")
+        print(f"[Retriever] Technical query detected -> increase BM25 weight ({bm25_weight})")
     
-    print("🚀 하이브리드 리트리버 초기화 중...")
+    print("[Retriever] Initializing hybrid retriever...")
     
-    # 1. 벡터 리트리버 설정 (RDS pgvector)
+    # 1. 甕겸돧苑??귐뗫뱜?귐됱쒔 ??쇱젟 (RDS pgvector)
     from app.vectorstore.pgvector_store import get_vector_store
     vector_store = get_vector_store(collection_name=collection_name)
     vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
 
-    # 2. BM25 리트리버 설정
+    # 2. BM25 ?귐뗫뱜?귐됱쒔 ??쇱젟
     bm25_retriever = _load_or_create_bm25_retriever(vector_store)
     bm25_retriever.k = k
 
-    # 3. 앙상블 리트리버 구성
+    # 3. ??덇맒???귐뗫뱜?귐됱쒔 ?닌딄쉐
     ensemble_retriever = EnsembleRetriever(
         retrievers=[vector_retriever, bm25_retriever],
         weights=[vector_weight, bm25_weight]
     )
     
-    print(f"✅ 하이브리드 리트리버 준비 완료 (가중치: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
+    print(f"[Retriever] Hybrid retriever ready (weights: Vector {vector_weight:.1f}, BM25 {bm25_weight:.1f} | k={k})")
     return ensemble_retriever
 
 def refresh_bm25_index():
