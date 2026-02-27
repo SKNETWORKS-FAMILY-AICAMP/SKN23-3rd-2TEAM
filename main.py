@@ -64,18 +64,6 @@ async def debug_system():
     DEVICE = get_device()
     print(f"✅ [Hardware] Using Device: {DEVICE}")
 
-<<<<<<< HEAD
-    # 3. RDS & Vector Store check (dry run)
-    try:
-        with PGVectorStoreManager() as _:
-            vector_store = get_vector_store()
-            # Simple smoke test query (minimum 1 result)
-            test_res = await asyncio.wait_for(asyncio.to_thread(lambda: vector_store.similarity_search("test", k=1)), timeout=12)
-            print(f"??[RDS/pgvector] Connection OK. Found {len(test_res)} docs in test.")
-    except Exception as e:
-        print(f"??[RDS/pgvector] Connection Failed: {e}")
-        # Warn and continue in debug path instead of blocking startup
-=======
     # 3. RDS & Vector Store 체크 (Dry Run)
     try:
         with PGVectorStoreManager() as _:
@@ -86,7 +74,6 @@ async def debug_system():
     except Exception as e:
         print(f"❌ [RDS/pgvector] Connection Failed: {e}")
         # 상용구축이므로 실패 시 경고만 하고 진행할지 중단할지 결정 (여기선 중단 권장)
->>>>>>> develop
         # sys.exit(1)
 
     print("="*50 + "\n")
