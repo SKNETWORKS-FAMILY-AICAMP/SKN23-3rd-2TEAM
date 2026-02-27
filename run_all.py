@@ -72,7 +72,9 @@ def run_all():
         ["poetry", "run", "python", "run_tunnel.py"],
         cwd=str(root_dir)
     )
-    time.sleep(2) # Give tunnel time to establish
+    # [수정] SSH 터널이 DB와 연결을 완전히 맺을 때까지 충분한 시간 대기
+    print("⏳ Waiting for SSH Tunnel to firmly establish (5 seconds)...")
+    time.sleep(5)
 
     # 1. Start FastAPI Backend (main.py)
     print("\n📡 Starting FastAPI Backend (main.py)...")
