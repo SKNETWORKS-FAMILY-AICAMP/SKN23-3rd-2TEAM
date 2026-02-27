@@ -13,11 +13,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import ROBOTICS_SPECIALIST_PROMPT
 from app.schemas.state import GraphState
-from app.core.config import MODEL_ACCURATE
+from app.core.config import get_model_accurate
 
 async def generate_robotics_answer(query: str, context: str, chat_history: str = "") -> str:
     """RAG Context 및 대화 맥락을 사용하여 로봇 특화 답변을 생성합니다 (async)."""
-    llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0)
+    llm = ChatOpenAI(model=get_model_accurate(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", ROBOTICS_SPECIALIST_PROMPT),
         ("human", "{query}")

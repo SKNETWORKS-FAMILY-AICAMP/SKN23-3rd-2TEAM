@@ -6,7 +6,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import HALLUCINATION_VERIFIER_PROMPT
 from app.schemas.state import GraphState
-from app.core.config import MODEL_FAST
+from app.core.config import get_model_fast
 
 
 class HallucinationEval(BaseModel):
@@ -71,7 +71,7 @@ async def verify_hallucination_with_feedback(
     """
     print("[Verifier] 환각 검증 + 실패 원인 분석 중...")
 
-    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
+    llm = ChatOpenAI(model=get_model_fast(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", VERIFIER_PROMPT_ENHANCED),
         ("human", VERIFIER_HUMAN_TEMPLATE),   # [FIX] 변수 슬롯을 human 메시지로 이동
@@ -98,7 +98,7 @@ async def verify_hallucination_with_feedback(
 def verify_hallucination(query: str, context: str, answer: str) -> bool:
     """단독 테스트/검증용 동기 함수. LangGraph 노드는 verifier_node를 사용하세요."""
     from langchain_core.prompts import ChatPromptTemplate
-    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
+    llm = ChatOpenAI(model=get_model_fast(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", VERIFIER_PROMPT_ENHANCED),
         ("human", VERIFIER_HUMAN_TEMPLATE),

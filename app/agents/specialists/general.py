@@ -10,10 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import GENERAL_PROMPT
 from app.schemas.state import GraphState
-from app.core.config import MODEL_FAST
-
-from langchain_community.tools.tavily_search import TavilySearchResults
-from app.core.config import MODEL_FAST, MODEL_ACCURATE, TAVILY_API_KEY
+from app.core.config import get_model_fast, get_model_accurate
 
 async def generate_general_answer(query: str, chat_history: str = "") -> str:
     """
@@ -28,7 +25,7 @@ async def generate_general_answer(query: str, chat_history: str = "") -> str:
         # context = "\n".join([f"Source: {r['url']}\nContent: {r['content']}" for r in search_results])
         
         # 3. LLM을 통한 답변 생성 (검색 결과 없이 직접 답변)
-        llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0.7)
+        llm = ChatOpenAI(model=get_model_accurate(), temperature=0.7)
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", GENERAL_PROMPT),
@@ -41,7 +38,7 @@ async def generate_general_answer(query: str, chat_history: str = "") -> str:
         
     except Exception as e:
         print(f"[General Agent] Error: {e} -> Fallback to basic LLM")
-        llm = ChatOpenAI(model=MODEL_FAST, temperature=0.7)
+        llm = ChatOpenAI(model=get_model_fast(), temperature=0.7)
         prompt = ChatPromptTemplate.from_messages([
             ("system", GENERAL_PROMPT),
             ("human", "대화 명세:\n{chat_history}\n\n[현재 질문]\n{query}")

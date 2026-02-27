@@ -1,13 +1,23 @@
 import os
 import json
 from tempfile import NamedTemporaryFile
+from typing import List
 
-from fastapi import APIRouter, Depends, Form, File, HTTPException, UploadFile, BackgroundTasks
+from fastapi import APIRouter, Depends, Form, File, HTTPException, UploadFile, BackgroundTasks, Query
 from pydantic import BaseModel
 
 from app.api.auth_api import get_me
-from app.services.pdf_ingestion_service import incremental_embed_markdown_to_pgvector
+from app.services.pdf_ingestion_service import (
+    incremental_embed_markdown_to_pgvector,
+    search_embedding_sources,
+    set_use_yn_by_sources,
+)
 from app.services.pdf_parse_service import parse_pdf_to_markdown
+from app.core.config import (
+    get_model_settings,
+    list_available_chat_models,
+    set_model_settings,
+)
 
 router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 
@@ -28,6 +38,36 @@ class UploadResponse(BaseModel):
     db_chunks_skipped: int = 0
     db_chunks_deleted: int = 0
     file_hash: str | None = None
+
+
+class ModelSettingsResponse(BaseModel):
+    model_fast: str
+    model_accurate: str
+    available_models: list[str]
+
+
+class ModelSettingsUpdateRequest(BaseModel):
+    model_fast: str
+    model_accurate: str
+
+
+class EmbeddingStatusRow(BaseModel):
+    source_key: str
+    chunk_count: int
+    active_chunks: int
+    inactive_chunks: int
+    creator: str
+    uploaded_at: str | None = None
+    use_yn: str
+
+
+class EmbeddingStatusSearchResponse(BaseModel):
+    documents: list[EmbeddingStatusRow]
+
+
+class EmbeddingStatusUpdateRequest(BaseModel):
+    source_keys: List[str]
+    use_yn: str
 
 
 @router.post("/parse_pdf_preview", response_model=PreviewResponse)
@@ -165,8 +205,6 @@ async def upload_pdf(
 from infrastructure.aws.s3_utils import S3Client
 from datetime import datetime
 from app.services.pdf_ingestion_service import get_all_registry_documents, delete_registry_documents_by_sources
-from typing import List
-
 class DeleteRequest(BaseModel):
     source_keys: List[str]
 
@@ -290,3 +328,120 @@ async def delete_registry(req: DeleteRequest, background_tasks: BackgroundTasks,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete registry documents: {e}")
+
+
+@router.get("/embeddings/search", response_model=EmbeddingStatusSearchResponse)
+async def search_embeddings(
+    file_name: str | None = Query(None, description="파일명 일부 검색"),
+    creator: str | None = Query(None, description="업로드 관리자 ID 검색"),
+    uploaded_date: str | None = Query(None, description="업로드 날짜(YYYY-MM-DD)"),
+    use_yn: str = Query("ALL", description="Y/N/ALL"),
+    limit: int = Query(200, ge=1, le=1000, description="조회 건수 제한"),
+    current_user: dict = Depends(get_me),
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    try:
+        rows = search_embedding_sources(
+            file_name=file_name,
+            creator=creator,
+            uploaded_date=uploaded_date,
+            use_yn=use_yn,
+            limit=limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding search failed: {e}")
+
+    return EmbeddingStatusSearchResponse(
+        documents=[
+            EmbeddingStatusRow(
+                source_key=row["source_key"],
+                chunk_count=row["chunk_count"],
+                active_chunks=row["active_chunks"],
+                inactive_chunks=row["inactive_chunks"],
+                creator=row["creator"],
+                uploaded_at=row["uploaded_at"].isoformat() if row.get("uploaded_at") else None,
+                use_yn=row["use_yn"],
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.put("/embeddings/use_yn")
+async def update_embedding_use_yn(
+    req: EmbeddingStatusUpdateRequest,
+    current_user: dict = Depends(get_me),
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    try:
+        update_result = set_use_yn_by_sources(
+            source_keys=req.source_keys,
+            use_yn=req.use_yn,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"use_yn update failed: {e}")
+
+    bm25_result = {"bm25_cache_updated": False, "bm25_status": "not_attempted"}
+    try:
+        if update_result.get("updated_chunks", 0) > 0:
+            if (req.use_yn or "").strip().upper() == "N":
+                from app.rag.retriever import remove_sources_from_bm25_cache
+                bm25_result = remove_sources_from_bm25_cache(req.source_keys)
+            else:
+                from app.rag.retriever import update_bm25_cache_for_uploaded_source
+                update_bm25_cache_for_uploaded_source(req.source_keys)
+                bm25_result = {"bm25_cache_updated": True, "bm25_status": "updated_for_activation"}
+    except Exception as e:
+        bm25_result = {"bm25_cache_updated": False, "bm25_status": f"error:{e}"}
+
+    return {
+        "message": "Embedding use_yn state updated.",
+        **update_result,
+        **bm25_result,
+    }
+
+
+@router.get("/models", response_model=ModelSettingsResponse)
+async def get_model_config(current_user: dict = Depends(get_me)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    settings = get_model_settings()
+    return ModelSettingsResponse(
+        model_fast=settings["model_fast"],
+        model_accurate=settings["model_accurate"],
+        available_models=list_available_chat_models(),
+    )
+
+
+@router.put("/models", response_model=ModelSettingsResponse)
+async def update_model_config(
+    req: ModelSettingsUpdateRequest,
+    current_user: dict = Depends(get_me),
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    try:
+        settings = set_model_settings(
+            model_fast=req.model_fast,
+            model_accurate=req.model_accurate,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model config update failed: {e}")
+
+    return ModelSettingsResponse(
+        model_fast=settings["model_fast"],
+        model_accurate=settings["model_accurate"],
+        available_models=list_available_chat_models(),
+    )

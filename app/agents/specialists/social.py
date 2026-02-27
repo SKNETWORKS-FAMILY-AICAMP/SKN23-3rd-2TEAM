@@ -7,7 +7,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.schemas.state import GraphState
-from app.core.config import MODEL_FAST
+from app.core.config import get_model_fast
 
 SOCIAL_PROMPT = """당신은 산업용 로봇 6대 브랜드(현대, 야스카와, 두산, ABB, UR, 레인보우) 및 용접/전기 기술지원을 위한 전문 챗봇입니다.
 기술적인 질문이 아닌 일반적인 인사, 자기소개, 감사의 말에 대해 따뜻하고 전문적인 어조로 답변하세요.
@@ -32,7 +32,7 @@ async def social_node(state: GraphState) -> dict:
         for msg in history_msgs
     ]) if history_msgs else "이전 대화 없음"
 
-    llm = ChatOpenAI(model=MODEL_FAST, temperature=0.7, streaming=False)
+    llm = ChatOpenAI(model=get_model_fast(), temperature=0.7, streaming=False)
     prompt = ChatPromptTemplate.from_messages([
         ("system", SOCIAL_PROMPT),
         ("human", "대화 명세:\n{chat_history}\n\n[현재 질문]\n{query}")
