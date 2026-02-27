@@ -65,13 +65,13 @@ def rerank_documents(
     model_name: str = None,
     top_n: int = DEFAULT_TOP_N,
     threshold: float = DEFAULT_THRESHOLD,
-) -> Tuple[List[Document], bool]:
+) -> Tuple[List[Document], bool, float]:
     """
     전역 싱글톤 리랭커를 사용하여 문서들을 정밀 재정렬합니다.
     """
     if not documents:
         print("[Reranker] 입력 문서가 없습니다 → 관련 없음 반환")
-        return [], False
+        return [], False, 0.0
 
     # 싱글톤 모델 가져오기 (이미 로드되어 있어야 함)
     cross_encoder = load_reranker_singleton(model_name)
@@ -102,8 +102,9 @@ def rerank_documents(
     if not passed:
         print(f"[Reranker] ⚠️ 임계값({threshold}) 통과 문서 없음 → '관련 없음' 반환")
         print(f"           최고 점수: {scored[0][0]:.4f} (기준 미달)")
-        return [], False
+        return [], False, float(scored[0][0]) if scored else 0.0
 
     top_docs = [doc for _, doc in passed[:top_n]]
-    print(f"[Reranker] ✅ 임계값 통과: {len(passed)}개 → 상위 {len(top_docs)}개 반환")
-    return top_docs, True
+    top_score = float(passed[0][0]) if passed else 0.0
+    print(f"[Reranker] ✅ 임계값 통과: {len(passed)}개 → 상위 {len(top_docs)}개 반환 (최고 점수: {top_score:.4f})")
+    return top_docs, True, top_score

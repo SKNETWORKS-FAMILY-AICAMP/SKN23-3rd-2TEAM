@@ -143,7 +143,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
         print(f"❌ User Query Failed: {e}")
     return None
 
-def log_chat_interaction(user_id: str, thread_id: str, query: str, response: str, latency: float = 0.0):
+def log_chat_interaction(user_id: str, thread_id: str, query: str, response: str, latency: float = 0.0, reranker_score: float | None = None, verifier_passed: bool | None = None):
     try:
         with open_optional_ssh_tunnel() as tunnel:
             conn_args = get_connection_kwargs()
@@ -154,8 +154,8 @@ def log_chat_interaction(user_id: str, thread_id: str, query: str, response: str
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO chat_logs (user_id, thread_id, query, response, latency) VALUES (%s, %s, %s, %s, %s)",
-                        (user_id, thread_id, query, response, latency)
+                        "INSERT INTO chat_logs (user_id, thread_id, query, response, latency, reranker_score, verifier_passed) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                        (user_id, thread_id, query, response, latency, reranker_score, verifier_passed)
                     )
                 conn.commit()
     except Exception as e:
@@ -172,14 +172,14 @@ def get_chat_logs(limit: int = 50) -> List[Dict[str, Any]]:
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT c.id, u.username, c.query, c.response, c.created_at 
+                        SELECT c.id, u.username, c.query, c.response, c.latency, c.reranker_score, c.verifier_passed, c.created_at 
                         FROM chat_logs c 
                         JOIN users u ON c.user_id = u.id 
                         ORDER BY c.created_at DESC 
                         LIMIT %s
                     """, (limit,))
                     rows = cur.fetchall()
-                    return [{"id": r[0], "username": r[1], "query": r[2], "response": r[3], "timestamp": r[4]} for r in rows]
+                    return [{"id": r[0], "username": r[1], "query": r[2], "response": r[3], "latency": r[4], "reranker_score": r[5], "verifier_passed": r[6], "timestamp": r[7]} for r in rows]
     except Exception as e:
         print(f"❌ Log Query Failed: {e}")
         return []

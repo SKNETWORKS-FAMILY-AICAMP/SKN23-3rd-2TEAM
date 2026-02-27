@@ -8,7 +8,7 @@ from sseclient import SSEClient
 # LangGraph, PostgreSQL 의존성을 모두 제거했습니다! (속도/메모리 완벽 최적화)
 # Streamlit은 무거운 로직을 돌리지 않고, FastAPI 백엔드로 API 요청만 넘깁니다.
 
-def generate_agent_response(user_input: str, thread_id: str):
+def generate_agent_response(user_input: str, thread_id: str, user_id: str = "Unknown"):
     """
     FastAPI 백엔드의 /chat/stream SSE 엔드포인트를 호출하여 답변을 스트리밍합니다.
     """
@@ -17,7 +17,7 @@ def generate_agent_response(user_input: str, thread_id: str):
     # 🌟 FastAPI 백엔드로 POST 요청 전송 (BM25, LangGraph 처리 및 DB 히스토리 저장까지 백엔드에서 모두 수행)
     response = requests.post(
         f"{API_URL}/chat",
-        json={"message": user_input, "thread_id": thread_id},
+        json={"message": user_input, "thread_id": thread_id, "user_id": user_id},
         stream=True
     )
     
@@ -45,9 +45,10 @@ def show_chat_page():
     
     # 상단 정보 표시 (세션에서 유저 ID와 권한 가져오기)
     user = st.session_state.get("user") or {}
-    user_id = user.get("username", "Unknown")
+    user_id = user.get("id", "00000000-0000-0000-0000-000000000000") # UUID 형식의 fallback
+    username = user.get("username", "Unknown")
     role = user.get("role", "user")
-    st.caption(f"🟢 접속자: **{user_id}** | 권한: **{role}**")
+    st.caption(f"🟢 접속자: **{username}** | 권한: **{role}**")
     if role == "admin" and st.button("Admin UI로 이동", type="secondary"):
         st.session_state.nav_selection = "Admin Dashboard"
         st.rerun()
@@ -71,14 +72,24 @@ def show_chat_page():
             
         # 4. AI 스트리밍 답변 처리 (LangGraph 연동)
         with st.chat_message("assistant"):
-            # API 스트리밍 호출 및 렌더링
+            # [V4.1] "분석 중..." 로딩 애니메이션 상태 구성
+            status_container = st.empty()
+            with status_container.status("🔍 기술 문서를 검색하고 분석 중입니다...", expanded=False) as status:
+                st.write("요청을 서버로 전송했습니다...")
+                
             def run_stream():
                 full_text = ""
                 placeholder = st.empty()
-                current_thread_id = f"streamlit_session_{user_id}"
+                current_thread_id = f"streamlit_session_{username}"
                 
                 # FastAPI 백엔드 연동 (매우 빠름, SSH/DB 재연결 불필요)
-                for chunk in generate_agent_response(user_input, current_thread_id):
+                first_chunk_received = False
+                for chunk in generate_agent_response(user_input, current_thread_id, user_id):
+                    # 첫 청크 수신 시 (로딩 완료) 상태 메시지 숨김
+                    if not first_chunk_received and chunk:
+                        status_container.empty()
+                        first_chunk_received = True
+
                     full_text += chunk
                     placeholder.markdown(full_text + "▌") 
                 
@@ -87,6 +98,9 @@ def show_chat_page():
             
             # 동기 함수 실행 (requests.get은 동기이므로 asyncio.run 불필요)
             final_response = run_stream()
+            
+            # 만약 스트리밍 중 에러로 인해 첫 청크가 안 왔다면 여기서 애니메이션 삭제
+            status_container.empty()
             
             # 대화 기록에 최종 답변 저장
             st.session_state.chat_history.append({"role": "assistant", "content": final_response})

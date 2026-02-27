@@ -86,7 +86,7 @@ async def robotics_node(state: GraphState) -> dict:
         filters = {"model_name": "Hi5"}
 
     # RAG 검색
-    context = run_rag_pipeline(search_query, domain="ROBOT", filters=filters)
+    context, max_score = run_rag_pipeline(search_query, domain="ROBOT", filters=filters)
 
     # ① 제로히트(Zero-hit) 조기 종료
     # Reranker 엄갑 통과 문서가 0개이면 LLM 호출 없이 즉시 피드백 루프 진입
@@ -106,6 +106,7 @@ async def robotics_node(state: GraphState) -> dict:
             "verifier_feedback": feedback_msg,
             "domain_mismatch":   False,
             "original_question": original_question,
+            "reranker_score":    max_score,
         }
 
     # ② 도메인 불일치 감지 — context가 로봇 관련 내용이 아니면 supervisor 재분류
@@ -116,6 +117,7 @@ async def robotics_node(state: GraphState) -> dict:
             "generated_answer": "",
             "domain_mismatch":  True,
             "original_question": original_question,
+            "reranker_score":   max_score,
         }
 
     # ② 정상: 도메인 일치 → 답변 생성
@@ -125,4 +127,5 @@ async def robotics_node(state: GraphState) -> dict:
         "generated_answer":  generated_answer,
         "domain_mismatch":   False,
         "original_question": original_question,
+        "reranker_score":    max_score,
     }

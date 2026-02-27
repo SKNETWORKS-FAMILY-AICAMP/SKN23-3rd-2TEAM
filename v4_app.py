@@ -92,7 +92,7 @@ else:
         st.session_state.nav_selection = selection
 
         st.divider()
-        if st.button("Logout", use_container_width=True):
+        if st.button("Logout", width="stretch"):
             logout(api, API_URL)
 
     if selection == "Chatbot":

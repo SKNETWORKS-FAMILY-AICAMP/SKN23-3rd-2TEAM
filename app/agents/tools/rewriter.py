@@ -340,6 +340,10 @@ def rewrite_query(original_query: str, chat_history: str = "") -> Tuple[str, str
 async def rewriter_node(state: GraphState) -> dict:
     print("--- [Node: Rewriter] 쿼리 최적화 중 ---")
     messages = state.get("messages", [])
+    
+    # [Step 5] 런타임 디버깅 로그 추가
+    print(f"🐛 [Debug] 불러온 이전 메시지 개수: {len(messages)}")
+
     if not messages:
         return {"rewritten_query": "", "original_question": "", "routing_hint": ""}
 

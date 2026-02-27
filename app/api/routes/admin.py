@@ -1,116 +1,290 @@
 import os
-import io
-import time
-from pathlib import Path
+import json
 from tempfile import NamedTemporaryFile
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+
+from fastapi import APIRouter, Depends, Form, File, HTTPException, UploadFile, BackgroundTasks
 from pydantic import BaseModel
 
-# AWS S3 및 PgVector 의존성 임포트
-from app.infrastructure.aws.s3_client import S3Client
-from app.core.database import open_optional_ssh_tunnel, get_connection_kwargs
-from app.api.auth_api import get_me  # JWT Token Validations
-import psycopg2
-from psycopg2.extras import execute_values
+from app.api.auth_api import get_me
+from app.services.pdf_ingestion_service import incremental_embed_markdown_to_pgvector
+from app.services.pdf_parse_service import parse_pdf_to_markdown
 
 router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 
-S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "weld-bot-knowledge-base")
-AWS_REGION = os.getenv("AWS_REGION", "ap-northeast-2")
-s3 = S3Client(region=AWS_REGION)
-
-# [Placeholder] 실제 Marker 라이브러리 연동
-# poetry add marker-pdf
-try:
-    from marker.convert import convert_single_pdf
-    from marker.models import load_all_models
-    HAS_MARKER = True
-    marker_models = load_all_models()
-except ImportError:
-    HAS_MARKER = False
-    marker_models = None
+class PreviewResponse(BaseModel):
+    message: str
+    parser_used: str | None = None
+    markdown_text: str
+    metadata_json: str
+    already_exists: bool = False
 
 class UploadResponse(BaseModel):
     message: str
-    s3_pdf_path: str
-    s3_md_path: str
+    status: str = "success"
+    parser_used: str | None = None
+    local_md_path: str | None = None
     db_chunks_inserted: int
+    total_chunks_parsed: int = 0
+    db_chunks_skipped: int = 0
+    db_chunks_deleted: int = 0
+    file_hash: str | None = None
 
-@router.post("/upload_pdf", response_model=UploadResponse)
-async def upload_pdf(
+
+@router.post("/parse_pdf_preview", response_model=PreviewResponse)
+async def parse_pdf_preview(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_me)
+    parser: str = Form("marker"),
+    admin_name: str = Form("admin"),
+    current_user: dict = Depends(get_me),
 ):
     """
-    1. 관리자 권한 확인
-    2. PDF를 S3에 원본 저장
-    3. Marker 모델로 PDF를 Markdown 파싱
-    4. 결과를 S3에 저장
-    5. Markdown을 Chunking 후 PgVector 등재
+    Step 1: Parse PDF to markdown (marker/pypdf fallback) and return preview payload.
+    Does NOT incrementaly embed or save into DB yet.
     """
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin privileges required")
 
-    if not file.filename.endswith(".pdf"):
+    filename = file.filename or ""
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
-    if not HAS_MARKER:
-        # For environment where Marker is too heavy, bypass or raise error
-        # raising error to indicate we need the marker-pdf package
-        raise HTTPException(status_code=501, detail="marker-pdf is not installed in the backend.")
-
     content = await file.read()
-    
-    # 임시 파일로 PDF 저장 (Marker가 파일 패스를 주로 요구함)
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+
     with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_pdf.write(content)
         tmp_pdf_path = tmp_pdf.name
 
     try:
-        # 1. 원본 PDF를 S3에 업로드
-        s3_pdf_key = f"raw_pdfs/{int(time.time())}_{file.filename}"
-        s3.client.upload_file(tmp_pdf_path, S3_BUCKET_NAME, s3_pdf_key)
+        from app.services.pdf_ingestion_service import get_all_registry_documents
+        try:
+            docs = get_all_registry_documents()
+            already_exists = any(d["source_key"] == filename for d in docs)
+        except Exception:
+            already_exists = False
 
-        # 2. Marker 로 PDF -> Markdown 변환
-        # convert_single_pdf returns (full_text, out_meta)
-        full_text, out_meta = convert_single_pdf(tmp_pdf_path, marker_models)
-        
-        # 3. 파싱 결과를 S3에 저장
-        s3_md_key = f"parsed_mds/{int(time.time())}_{file.filename.replace('.pdf', '.md')}"
-        s3.client.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=s3_md_key,
-            Body=full_text.encode("utf-8")
+        full_text, parser_used, metadata = parse_pdf_to_markdown(
+            tmp_pdf_path, 
+            source_name=filename, 
+            parser_choice=parser,
+            creator=admin_name
         )
-
-        # 4. Markdown 청킹 및 Text Embedding Vector Store 적재 로직
-        # 여기서는 langchain_openai 의 OpenAIEmbeddings를 사용하는 파이프라인 호출 가정
-        from app.ingest.chunking import get_text_splitter
-        from langchain_openai import OpenAIEmbeddings
-        from langchain.schema import Document
-        from app.vectorstore.pgvector_store import get_vector_store, PGVectorStoreManager
-
-        splitter = get_text_splitter()
-        # Document 객체로 변환
-        docs = [Document(page_content=full_text, metadata={"source": file.filename, "s3_pdf": s3_pdf_key, "s3_md": s3_md_key})]
-        chunks = splitter.split_documents(docs)
-
-        # VectorStore 연동하여 DB 저장 (run_tunnel 처리 포함)
-        with PGVectorStoreManager() as _:
-            vector_store = get_vector_store()
-            # 실제로 DB에 적재
-            vector_store.add_documents(chunks)
-
-        return UploadResponse(
-            message=f"Successfully parsed and ingested {file.filename}",
-            s3_pdf_path=f"s3://{S3_BUCKET_NAME}/{s3_pdf_key}",
-            s3_md_path=f"s3://{S3_BUCKET_NAME}/{s3_md_key}",
-            db_chunks_inserted=len(chunks)
+        return PreviewResponse(
+            message=f"Successfully parsed {filename} for preview.",
+            parser_used=parser_used,
+            markdown_text=full_text,
+            metadata_json=json.dumps(metadata, ensure_ascii=False, indent=2),
+            already_exists=already_exists
         )
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF Processing Pipeline Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF Parsing Preview Error: {e}")
     finally:
-        # 임시 파일 삭제
         if os.path.exists(tmp_pdf_path):
             os.remove(tmp_pdf_path)
+
+
+@router.post("/upload_pdf", response_model=UploadResponse)
+async def upload_pdf(
+    file: UploadFile = File(...),
+    parser: str = Form("marker"),
+    current_user: dict = Depends(get_me),
+):
+    """
+    Admin PDF pipeline (local):
+    1) parse PDF to markdown (marker/pypdf fallback)
+    2) incremental chunk embedding into PGVector
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    filename = file.filename or ""
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+
+    with NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+        tmp_pdf.write(content)
+        tmp_pdf_path = tmp_pdf.name
+
+    try:
+        admin_name = (current_user.get("username") if isinstance(current_user, dict) else None) or "admin"
+        full_text, parser_used, metadata = parse_pdf_to_markdown(
+            tmp_pdf_path, 
+            source_name=filename,
+            parser_choice=parser,
+            creator=admin_name
+        )
+
+        import json
+        ingest_result = incremental_embed_markdown_to_pgvector(
+            markdown_text=full_text,
+            file_bytes=content,
+            original_filename=filename,
+            creator=admin_name,
+            s3_pdf_key=None,
+            s3_md_key=None,
+            file_metadata_json=json.dumps(metadata, ensure_ascii=False)
+        )
+
+        # [V4.1] 강제 초기화(Refresh) 연동: 
+        # DB에 변화가 생겼다면(삽입/삭제), 캐싱된 BM25 싱글톤을 삭제하고 재생성합니다.
+        chunks_inserted = ingest_result.get("db_chunks_inserted", 0)
+        chunks_deleted = ingest_result.get("db_chunks_deleted", 0)
+        
+        if chunks_inserted > 0 or chunks_deleted > 0:
+            try:
+                # Use quasi-incremental update directly instead of full refresh if we wanted to
+                from app.rag.retriever import update_bm25_cache_for_uploaded_source
+                update_bm25_cache_for_uploaded_source([filename])
+            except Exception as e:
+                print(f"⚠️ BM25 Refresh Error: {e}")
+
+        return UploadResponse(
+            message=f"Successfully parsed {filename}. {ingest_result['message_suffix']}",
+            parser_used=parser_used,
+            local_md_path=ingest_result["local_md_path"],
+            db_chunks_inserted=ingest_result["db_chunks_inserted"],
+            total_chunks_parsed=ingest_result["total_chunks_parsed"],
+            db_chunks_skipped=ingest_result["db_chunks_skipped"],
+            db_chunks_deleted=ingest_result["db_chunks_deleted"],
+            file_hash=ingest_result["file_hash"],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF Processing Pipeline Error: {e}")
+    finally:
+        if os.path.exists(tmp_pdf_path):
+            os.remove(tmp_pdf_path)
+
+
+from infrastructure.aws.s3_utils import S3Client
+from datetime import datetime
+from app.services.pdf_ingestion_service import get_all_registry_documents, delete_registry_documents_by_sources
+from typing import List
+
+class DeleteRequest(BaseModel):
+    source_keys: List[str]
+
+
+@router.post("/commit_pdf", response_model=UploadResponse)
+async def commit_pdf(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    markdown_text: str = Form(...),
+    metadata_json: str = Form(...),
+    admin_name: str = Form(...),
+    current_user: dict = Depends(get_me),
+):
+    """
+    Step 2: Commit PDF, parsed MD, and JSON to S3, then incrementally embed into PGVector.
+    """
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
+    filename = file.filename or "unknown.pdf"
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    base_prefix = f"ingested_docs/{date_str}_{admin_name}_{filename}"
+    s3_pdf_key = f"{base_prefix}/{filename}"
+    s3_md_key = f"{base_prefix}/{filename}.md"
+    s3_json_key = f"{base_prefix}/{filename}.json"
+
+    # Upload to S3
+    try:
+        s3_client = S3Client()
+        s3_client.upload_file_bytes(content, s3_pdf_key, "application/pdf")
+        s3_client.upload_file_bytes(markdown_text.encode("utf-8"), s3_md_key, "text/markdown")
+        s3_client.upload_file_bytes(metadata_json.encode("utf-8"), s3_json_key, "application/json")
+    except Exception as e:
+        print(f"S3 Upload failed: {e}")
+        # Proceed with embedding even if S3 fails, or fail hard? For now, print error but try to continue,
+        # actually, S3 is required according to instructions.
+        raise HTTPException(status_code=500, detail=f"S3 Upload Error: {e}")
+
+    try:
+        ingest_result = incremental_embed_markdown_to_pgvector(
+            markdown_text=markdown_text,
+            file_bytes=content,
+            original_filename=filename,
+            creator=admin_name,
+            s3_pdf_key=s3_pdf_key,
+            s3_md_key=s3_md_key,
+            file_metadata_json=metadata_json,
+        )
+
+        chunks_inserted = ingest_result.get("db_chunks_inserted", 0)
+        chunks_deleted = ingest_result.get("db_chunks_deleted", 0)
+        
+        if chunks_inserted > 0 or chunks_deleted > 0:
+            from app.rag.retriever import update_bm25_cache_for_uploaded_source
+            background_tasks.add_task(update_bm25_cache_for_uploaded_source, [filename])
+
+        return UploadResponse(
+            message=f"Successfully committed {filename} to S3 and PGVector.",
+            status="background_processing",
+            parser_used="pre-parsed",
+            local_md_path=ingest_result["local_md_path"],
+            db_chunks_inserted=ingest_result["db_chunks_inserted"],
+            total_chunks_parsed=ingest_result["total_chunks_parsed"],
+            db_chunks_skipped=ingest_result["db_chunks_skipped"],
+            db_chunks_deleted=ingest_result["db_chunks_deleted"],
+            file_hash=ingest_result["file_hash"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF Commit Pipeline Error: {e}")
+
+
+@router.get("/registry")
+async def get_registry(current_user: dict = Depends(get_me)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+        
+    try:
+        docs = get_all_registry_documents()
+        return {"documents": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch registry: {e}")
+
+
+@router.delete("/registry")
+async def delete_registry(req: DeleteRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_me)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+        
+    try:
+        # 1. Delete from PGVector and Registry DB
+        result = delete_registry_documents_by_sources(req.source_keys)
+        
+        # 2. Delete from S3
+        s3_keys = result.get("s3_keys_to_delete", [])
+        if s3_keys:
+            s3_client = S3Client()
+            s3_client.delete_files(s3_keys)
+            
+        # 3. Refresh BM25 Cache in Background
+        if result.get("deleted_chunks", 0) > 0:
+            try:
+                from app.rag.retriever import update_bm25_cache_for_uploaded_source
+                background_tasks.add_task(update_bm25_cache_for_uploaded_source, req.source_keys)
+            except Exception as e:
+                print(f"⚠️ Background task scheduling error for BM25: {e}")
+                
+        return {
+            "message": f"Successfully deleted {result['deleted_chunks']} chunks and associated files.",
+            "status": "background_processing",
+            "deleted_chunks": result['deleted_chunks'],
+            "deleted_s3_keys": s3_keys
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete registry documents: {e}")
