@@ -412,6 +412,31 @@ def incremental_embed_markdown_to_pgvector(
         _delete_registry_rows(collection_name, stale_ids)
     _upsert_registry_rows(current_rows)
 
+    bm25_result: dict[str, Any] = {
+        "bm25_cache_updated": False,
+        "bm25_status": "not_attempted",
+        "bm25_total_docs": None,
+        "bm25_source_docs": len(current_chunk_ids),
+        "bm25_prev_source_docs": None,
+    }
+    try:
+        from app.rag.retriever import update_bm25_cache_for_uploaded_source
+
+        source_file = f"{Path(original_filename).stem}.md"
+        ordered_docs = [docs_by_chunk_id[cid] for cid in current_chunk_ids]
+        bm25_result = update_bm25_cache_for_uploaded_source(
+            ordered_docs,
+            source_file=source_file,
+        )
+    except Exception as e:
+        bm25_result = {
+            "bm25_cache_updated": False,
+            "bm25_status": f"error:{e}",
+            "bm25_total_docs": None,
+            "bm25_source_docs": len(current_chunk_ids),
+            "bm25_prev_source_docs": None,
+        }
+
     unchanged = bool(existing_ids) and not new_ids and not stale_ids
     return {
         "message_suffix": "No new chunks detected (already indexed)." if unchanged else "Incremental embedding completed.",
@@ -421,4 +446,5 @@ def incremental_embed_markdown_to_pgvector(
         "db_chunks_inserted": len(new_ids),
         "db_chunks_skipped": skipped_count,
         "db_chunks_deleted": len(stale_ids),
+        **bm25_result,
     }
