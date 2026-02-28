@@ -56,6 +56,10 @@ if "force_logged_out" not in st.session_state:
     st.session_state.force_logged_out = False
 if "nav_selection" not in st.session_state:
     st.session_state.nav_selection = "💬 Chatbot"
+if "public_route" not in st.session_state:
+    st.session_state.public_route = "main"
+if "auth_route" not in st.session_state:
+    st.session_state.auth_route = "home"
 # Instantiate globally for the script run
 cookie_controller = CookieController(key="weld_cookies_new")
 st.session_state.cookie_controller = cookie_controller
@@ -64,20 +68,23 @@ st.session_state.cookie_controller = cookie_controller
 # 1. Initialize Navigation early to preserve URL state across reruns!
 # -------------------------------------------------------------------
 from frontend.admin_ui import show_admin_page
-from frontend.auth_ui import logout, show_auth_page
-from frontend.chat_ui import show_chat_page
+from frontend.auth_ui import logout
+from frontend.chat import show_chat_page
+from frontend.login import show_login_page
+from frontend.main_page import show_main_page
+from frontend.main_page_logout import show_main_page_logout
 from frontend.monitoring_ui import show_monitoring_page
+from frontend.signup import show_signup_page
 
-# Define Pages
-chat_page = st.Page(show_chat_page, title="Chatbot", icon="💬", url_path="chat", default=True)
-monitoring_page = st.Page(show_monitoring_page, title="RAG Monitoring", icon="📊", url_path="monitoring")
-admin_page = st.Page(show_admin_page, title="System Settings", icon="⚙️", url_path="settings")
 
-nav_structure = {
-    "User": [chat_page],
-    "Admin": [monitoring_page, admin_page]
-}
-pg = st.navigation(nav_structure)
+def _set_public_route(route: str) -> None:
+    st.session_state.public_route = route
+    st.rerun()
+
+
+def _set_auth_route(route: str) -> None:
+    st.session_state.auth_route = route
+    st.rerun()
 
 # -------------------------------------------------------------------
 # 2. Handle Cookies & Auth State
@@ -138,6 +145,11 @@ if not st.session_state.authenticated and st.session_state.access_token:
 user = st.session_state.user or {}
 
 if not st.session_state.authenticated:
+    requested_public = st.query_params.get("public")
+    if requested_public in {"main", "login", "signup"}:
+        st.session_state.public_route = requested_public
+        st.query_params.clear()
+
     # Hide the sidebar if unauthenticated
     st.markdown(
         """
@@ -148,13 +160,49 @@ if not st.session_state.authenticated:
         """,
         unsafe_allow_html=True,
     )
-    from frontend.auth_ui import show_auth_page
-    show_auth_page(api, API_URL)
+
+    public_route = st.session_state.get("public_route", "main")
+    if public_route == "login":
+        show_login_page(
+            api=api,
+            api_url=API_URL,
+            on_back=lambda: _set_public_route("main"),
+            on_signup=lambda: _set_public_route("signup"),
+        )
+    elif public_route == "signup":
+        show_signup_page(
+            api=api,
+            api_url=API_URL,
+            on_login=lambda: _set_public_route("login"),
+        )
+    else:
+        show_main_page(
+            on_login=lambda: _set_public_route("login"),
+            on_signup=lambda: _set_public_route("signup"),
+        )
+    st.stop()
 else:
+    role = user.get("role", "user")
+    route = st.session_state.get("auth_route", "home")
+    if route in {"monitoring", "settings"} and role != "admin":
+        st.session_state.auth_route = "home"
+        route = "home"
+
     # Render Custom Sidebar Elements above/below navigation
     with st.sidebar:
         st.title("🤖 WELDBOT v4.0")
-        st.write(f"Logged in as: **{user.get('username', 'unknown')}** ({user.get('role', 'user')})")
+        st.write(f"Logged in as: **{user.get('username', 'unknown')}** ({role})")
+
+        st.subheader("Navigation")
+        if st.button("🏠 Home", width="stretch", key="side_home"):
+            _set_auth_route("home")
+        if st.button("💬 Chatbot", width="stretch", key="side_chat"):
+            _set_auth_route("chat")
+        if role == "admin":
+            if st.button("📊 RAG Monitoring", width="stretch", key="side_monitoring"):
+                _set_auth_route("monitoring")
+            if st.button("⚙️ System Settings", width="stretch", key="side_settings"):
+                _set_auth_route("settings")
 
         token = st.session_state.access_token
         with st.expander("Auth Token"):
@@ -170,13 +218,18 @@ else:
         if st.button("Logout", width="stretch"):
             logout(api, API_URL)
 
-    # Hide Admin pages from sidebar for normal users via CSS if needed, 
-    # but since Streamlit st.navigation doesn't support dynamic hiding after init without rerun,
-    # we enforce access control at the page level or just accept they see the menu.
-    # Actually, we can restrict by checking user role before pg.run():
-    if (pg.url_path in ["monitoring", "settings"]) and user.get("role") != "admin":
+    if route in {"monitoring", "settings"} and role != "admin":
         st.error("관리자 권한이 필요합니다.")
         st.stop()
 
-    # Run the selected page
-    pg.run()
+    if route == "chat":
+        show_chat_page()
+    elif route == "monitoring":
+        show_monitoring_page()
+    elif route == "settings":
+        show_admin_page()
+    else:
+        show_main_page_logout(
+            on_logout=lambda: logout(api, API_URL),
+            on_start_chat=lambda: _set_auth_route("chat"),
+        )
