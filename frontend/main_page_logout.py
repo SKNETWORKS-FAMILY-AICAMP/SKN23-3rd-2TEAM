@@ -2,7 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
-IMAGE_PATH = Path(r"C:\Users\Playdata\3rd_project\frontend\image\streamlit1.jpg")
+IMAGE_PATH = Path(r"/Users/jy/3rd-2TEAM/SKN23-3rd-2TEAM/frontend/image/streamlit1.png")
 
 
 def show_main_page_logout(on_logout, on_start_chat):
@@ -68,7 +68,7 @@ def show_main_page_logout(on_logout, on_start_chat):
 
         .logo-name {
             font-size: 0.95rem;
-            font-weight: 600;
+            font-weight: 650;
             color: #dbf5ff;
             letter-spacing: 0.08em;
         }
@@ -109,14 +109,14 @@ def show_main_page_logout(on_logout, on_start_chat):
 
         .st-key-home_nav_chat {
             position: fixed;
-            top: 10px;
+            top: 15px;
             right: 132px;
             width: 80px;
             z-index: 10020;
         }
         .st-key-home_nav_logout {
             position: fixed;
-            top: 10px;
+            top: 15px;
             right: 24px;
             width: 100px;
             z-index: 10020;
@@ -193,7 +193,7 @@ def show_main_page_logout(on_logout, on_start_chat):
             st.markdown(
                 """
                 <p style='text-align:center; font-size:16px; line-height:1.6; margin:0 0 22px 0; font-family:"Noto Serif KR", serif;'>
-                  WELDPILOT은 용접 현장의 모든 위험을 감지하고 작업자를 지킵니다.
+                  WELDPILOT은 로봇용접 현장의 모든 위험을 감지하고 작업자를 지킵니다.
                   지금 바로 접속하여 안전한 작업 환경을 만드세요.
                 </p>
                 """,
