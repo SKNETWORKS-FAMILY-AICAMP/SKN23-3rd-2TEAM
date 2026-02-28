@@ -256,6 +256,19 @@ def inject_styles():
   color: #ff9b7c !important;
 }
 
+.chat-online-status {
+  position: fixed;
+  top: 16px;
+  right: 340px;
+  z-index: 10025;
+  color: #a7f3d0;
+  font-size: 0.83rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  text-shadow: 0 0 10px rgba(34,197,94,0.28);
+}
+
 /* ══════════════════════════════════════════════════
    하단 고정 레이아웃
 
@@ -423,11 +436,14 @@ def render_navbar():
           <div class="logo-name">WELDPILOT AI</div>
         </div>
       </div>
-      <div class="menu">
-        <span style="color:#9ca3af;font-size:0.85rem;margin-right:10px;">🟢 {username}님 접속 중</span>
-      </div>
+      <div class="menu"></div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        f'<div class="chat-online-status">🟢 {username}님 접속 중</div>',
+        unsafe_allow_html=True,
+    )
 
     if st.button("Home", key="chat_nav_home", use_container_width=True):
         st.session_state.auth_route = "home"
