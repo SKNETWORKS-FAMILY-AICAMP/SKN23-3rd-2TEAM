@@ -196,9 +196,9 @@ def logout(api, API_URL):
     st.session_state.authenticated = False
     st.session_state.access_token = None
     st.session_state.force_logged_out = True
+    st.session_state.cookie_restore_attempted = False
     _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
-    import time
-    time.sleep(0.5)
+    st.query_params.clear()
     st.rerun()
