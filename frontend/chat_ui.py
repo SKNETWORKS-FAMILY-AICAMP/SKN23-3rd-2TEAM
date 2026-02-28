@@ -455,12 +455,19 @@ def render_navbar():
         st.session_state.access_token = None
         st.session_state.force_logged_out = True
         st.session_state.cookie_restore_attempted = False
+        st.session_state.cookie_restore_attempt_count = 0
         st.session_state.auth_route = "home"
 
         controller = st.session_state.get("cookie_controller")
         if controller:
             try:
                 controller.remove("weld_access_token", path="/", same_site="lax")
+            except Exception:
+                pass
+        backup_manager = st.session_state.get("cookie_manager_auth")
+        if backup_manager:
+            try:
+                backup_manager.delete("weld_access_token")
             except Exception:
                 pass
 

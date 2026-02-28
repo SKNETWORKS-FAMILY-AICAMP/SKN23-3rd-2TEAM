@@ -1,6 +1,8 @@
 import re
 
+import extra_streamlit_components as stx
 import streamlit as st
+from streamlit_cookies_controller import CookieController
 
 
 def _normalize_token(raw_token) -> str | None:
@@ -189,13 +191,38 @@ def show_login_page(api, api_url, on_back, on_signup):
                     st.session_state.authenticated = True
                     st.session_state.force_logged_out = False
                     st.session_state.cookie_restore_attempted = False
+                    st.session_state.cookie_restore_attempt_count = 0
 
                     controller = st.session_state.get("cookie_controller")
+                    if controller is None:
+                        try:
+                            controller = CookieController(key="weld_cookies_new")
+                            st.session_state.cookie_controller = controller
+                        except Exception:
+                            controller = None
                     if controller:
                         try:
                             controller.set(
                                 "weld_access_token",
                                 token,
+                                path="/",
+                                max_age=60 * 60 * 24 * 7,
+                                same_site="lax",
+                            )
+                        except Exception:
+                            pass
+                    backup_manager = st.session_state.get("cookie_manager_auth")
+                    if backup_manager is None:
+                        try:
+                            backup_manager = stx.CookieManager(key="weld_cookie_manager_auth")
+                            st.session_state.cookie_manager_auth = backup_manager
+                        except Exception:
+                            backup_manager = None
+                    if backup_manager:
+                        try:
+                            backup_manager.set(
+                                cookie="weld_access_token",
+                                val=token,
                                 path="/",
                                 max_age=60 * 60 * 24 * 7,
                                 same_site="lax",

@@ -1,9 +1,11 @@
 import base64
 import json
+import time
 
 import requests
 import streamlit as st
 from streamlit_cookies_controller import CookieController
+import extra_streamlit_components as stx
 
 st.set_page_config(
     page_title="WELDBOT v4.0",
@@ -42,6 +44,78 @@ def _decode_jwt_payload(token: str) -> dict:
         return json.loads(decoded)
     except Exception:
         return {}
+
+
+def _read_context_cookie_token() -> str | None:
+    try:
+        cookies = st.context.cookies
+    except Exception:
+        return None
+
+    if not cookies:
+        return None
+
+    return _normalize_token(cookies.get("weld_access_token"))
+
+
+def _sync_access_token_cookie(controller: CookieController | None, token: str | None) -> None:
+    normalized = _normalize_token(token)
+    if not controller or not normalized:
+        return
+    try:
+        controller.set(
+            "weld_access_token",
+            normalized,
+            path="/",
+            max_age=60 * 60 * 24 * 7,
+            same_site="lax",
+        )
+    except Exception:
+        pass
+
+
+def _read_backup_cookie_token() -> str | None:
+    manager = st.session_state.get("cookie_manager_auth")
+    if manager is None:
+        try:
+            manager = stx.CookieManager(key="weld_cookie_manager_auth")
+            st.session_state.cookie_manager_auth = manager
+        except Exception:
+            manager = None
+    if not manager:
+        return None
+
+    try:
+        return _normalize_token(manager.get(cookie="weld_access_token"))
+    except Exception:
+        return None
+
+
+def _sync_backup_access_token_cookie(token: str | None) -> None:
+    normalized = _normalize_token(token)
+    if not normalized:
+        return
+
+    manager = st.session_state.get("cookie_manager_auth")
+    if manager is None:
+        try:
+            manager = stx.CookieManager(key="weld_cookie_manager_auth")
+            st.session_state.cookie_manager_auth = manager
+        except Exception:
+            manager = None
+    if not manager:
+        return
+
+    try:
+        manager.set(
+            cookie="weld_access_token",
+            val=normalized,
+            path="/",
+            max_age=60 * 60 * 24 * 7,
+            same_site="lax",
+        )
+    except Exception:
+        pass
 
 
 if "authenticated" not in st.session_state:
@@ -99,21 +173,40 @@ if "cookie_initialized" not in st.session_state:
 
 if "cookie_restore_attempted" not in st.session_state:
     st.session_state.cookie_restore_attempted = False
+if "cookie_restore_attempt_count" not in st.session_state:
+    st.session_state.cookie_restore_attempt_count = 0
 
 api = st.session_state.api_session
 
 # Restore token from browser cookie on rerun/new session.
-if cookie_controller and not st.session_state.force_logged_out:
+if not st.session_state.force_logged_out:
     try:
-        cookie_token = _normalize_token(cookie_controller.get("weld_access_token"))
+        # 1) Read request cookie directly (most reliable on hard refresh).
+        cookie_token = _read_context_cookie_token()
+
+        # 2) Fallback to component-managed cookie cache.
+        if not cookie_token and cookie_controller:
+            # Always refresh component cache before reading; otherwise the first
+            # empty snapshot can stick in session_state across reruns.
+            cookie_controller.refresh()
+            cookie_token = _normalize_token(cookie_controller.get("weld_access_token"))
+
+        # 3) Backup cookie manager fallback.
+        if not cookie_token:
+            cookie_token = _read_backup_cookie_token()
+
         if cookie_token and not st.session_state.get("access_token"):
             st.session_state.access_token = cookie_token
+            st.session_state.cookie_restore_attempted = False
+            st.session_state.cookie_restore_attempt_count = 0
         elif (
             not st.session_state.get("access_token")
-            and not st.session_state.cookie_restore_attempted
+            and st.session_state.cookie_restore_attempt_count < 3
         ):
-            # The component can return empty on its first render cycle; retry once.
+            # Custom cookie component may return empty on early cycles.
+            st.session_state.cookie_restore_attempt_count += 1
             st.session_state.cookie_restore_attempted = True
+            time.sleep(0.15)
             st.rerun()
     except Exception:
         pass
@@ -131,6 +224,10 @@ if not st.session_state.authenticated and st.session_state.access_token:
             st.session_state.user = response.json()
             st.session_state.authenticated = True
             st.session_state.cookie_restore_attempted = False
+            st.session_state.cookie_restore_attempt_count = 0
+            # Keep browser cookie in sync while authenticated.
+            _sync_access_token_cookie(cookie_controller, token)
+            _sync_backup_access_token_cookie(token)
         elif response.status_code in (401, 403):
             st.session_state.access_token = None
             if cookie_controller:
@@ -138,11 +235,26 @@ if not st.session_state.authenticated and st.session_state.access_token:
                     cookie_controller.remove("weld_access_token", path="/", same_site="lax")
                 except Exception:
                     pass
+            backup_manager = st.session_state.get("cookie_manager_auth")
+            if backup_manager:
+                try:
+                    backup_manager.delete("weld_access_token")
+                except Exception:
+                    pass
     except Exception:
         # Keep cookie/token on transient backend/network failures.
         pass
 
 user = st.session_state.user or {}
+
+# If session is authenticated but request cookie is missing (or stale),
+# rewrite cookie from in-memory token to prevent logout on next hard refresh.
+if st.session_state.authenticated and st.session_state.access_token:
+    context_cookie = _read_context_cookie_token()
+    memory_token = _normalize_token(st.session_state.access_token)
+    if memory_token and context_cookie != memory_token:
+        _sync_access_token_cookie(cookie_controller, memory_token)
+        _sync_backup_access_token_cookie(memory_token)
 
 if not st.session_state.authenticated:
     requested_public = st.query_params.get("public")
