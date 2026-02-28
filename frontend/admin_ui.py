@@ -11,6 +11,31 @@ def show_admin_page():
 
     API_BASE = "http://localhost:8000"
 
+    def _admin_logout():
+        token = st.session_state.get("access_token")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        try:
+            requests.post(f"{API_BASE}/auth/logout", headers=headers, timeout=5)
+        except Exception:
+            pass
+
+        st.session_state.user = None
+        st.session_state.authenticated = False
+        st.session_state.access_token = None
+        st.session_state.force_logged_out = True
+        st.session_state.cookie_restore_attempted = False
+        st.session_state.auth_route = "home"
+
+        controller = st.session_state.get("cookie_controller")
+        if controller:
+            try:
+                controller.remove("weld_access_token", path="/", same_site="lax")
+            except Exception:
+                pass
+
+        st.query_params.clear()
+        st.rerun()
+
     # -----------------------------
     # Page Config
     # -----------------------------
@@ -42,16 +67,39 @@ def show_admin_page():
     # -----------------------------
     # Main Title
     # -----------------------------
+    nav_cols = st.columns([9, 1, 1, 1])
+    with nav_cols[1]:
+        if st.button("Home", key="admin_nav_home", use_container_width=True):
+            st.session_state.auth_route = "home"
+            st.rerun()
+    with nav_cols[2]:
+        if st.button("Chat", key="admin_nav_chat", use_container_width=True):
+            st.session_state.auth_route = "chat"
+            st.rerun()
+    with nav_cols[3]:
+        if st.button("Logout", key="admin_nav_logout", use_container_width=True):
+            _admin_logout()
+
     st.title("📊 관리자 통합 대시보드")
     st.caption("WELD-BOT 문서 관리 · Vector DB · 로그 모니터링")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📥 Ingestion",
-        "🗂 Vector Registry",
-        "👥 Users",
-        "🤖 Model Settings",
-        "🧹 Embedding 상태관리",
-    ])
+    ENABLE_LEGACY_VECTOR_REGISTRY_TAB = False
+
+    if ENABLE_LEGACY_VECTOR_REGISTRY_TAB:
+        tab1, tab2, tab5, tab3, tab4 = st.tabs([
+            "📥 Ingestion",
+            "🗂 Vector Registry (Legacy)",
+            "🧹 Embedding 상태관리",
+            "👥 Users",
+            "🤖 Model Settings",
+        ])
+    else:
+        tab1, tab5, tab3, tab4 = st.tabs([
+            "📥 Ingestion",
+            "🧹 Embedding 상태관리",
+            "👥 Users",
+            "🤖 Model Settings",
+        ])
 
     # =====================================================
     # TAB 1 - INGESTION
@@ -193,48 +241,49 @@ def show_admin_page():
     # =====================================================
     # TAB 2 - VECTOR REGISTRY
     # =====================================================
-    with tab2:
+    if ENABLE_LEGACY_VECTOR_REGISTRY_TAB:
+        with tab2:
 
-        st.markdown("## 🗂 Vector DB Registry")
+            st.markdown("## 🗂 Vector DB Registry")
 
-        token = st.session_state.get("access_token")
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+            token = st.session_state.get("access_token")
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
 
-        res = requests.get(f"{API_BASE}/admin/registry", headers=headers)
+            res = requests.get(f"{API_BASE}/admin/registry", headers=headers)
 
-        if res.status_code == 200:
-            docs = res.json().get("documents", [])
+            if res.status_code == 200:
+                docs = res.json().get("documents", [])
 
-            if docs:
-                df = pd.DataFrame(docs)
+                if docs:
+                    df = pd.DataFrame(docs)
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("총 문서 수", len(df))
-                col2.metric("총 청크 수", df["chunk_count"].sum())
-                col3.metric("최근 업로드", df["created_at"].max())
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("총 문서 수", len(df))
+                    col2.metric("총 청크 수", df["chunk_count"].sum())
+                    col3.metric("최근 업로드", df["created_at"].max())
 
-                st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, use_container_width=True)
 
-                st.warning("⚠️ 삭제 시 DB + S3 + 인덱스 모두 제거됩니다")
+                    st.warning("⚠️ 삭제 시 DB + S3 + 인덱스 모두 제거됩니다")
 
-                delete_targets = st.multiselect(
-                    "삭제할 문서 선택",
-                    df["source_key"].tolist()
-                )
-
-                if st.button("🚨 선택 삭제", type="primary") and delete_targets:
-                    del_res = requests.delete(
-                        f"{API_BASE}/admin/registry",
-                        headers=headers,
-                        json={"source_keys": delete_targets}
+                    delete_targets = st.multiselect(
+                        "삭제할 문서 선택",
+                        df["source_key"].tolist()
                     )
-                    if del_res.status_code == 200:
-                        st.success("삭제 완료")
-                        st.rerun()
-                    else:
-                        st.error(del_res.text)
-            else:
-                st.info("저장된 문서 없음")
+
+                    if st.button("🚨 선택 삭제", type="primary") and delete_targets:
+                        del_res = requests.delete(
+                            f"{API_BASE}/admin/registry",
+                            headers=headers,
+                            json={"source_keys": delete_targets}
+                        )
+                        if del_res.status_code == 200:
+                            st.success("삭제 완료")
+                            st.rerun()
+                        else:
+                            st.error(del_res.text)
+                else:
+                    st.info("저장된 문서 없음")
 
 
 

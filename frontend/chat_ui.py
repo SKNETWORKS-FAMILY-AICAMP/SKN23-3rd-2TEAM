@@ -31,8 +31,8 @@ cookie_manager = None
 def _ensure_chat_session_state():
     global cookie_manager
 
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = bool(st.session_state.get("authenticated", False))
+    # Single source of truth: authenticated
+    st.session_state.logged_in = bool(st.session_state.get("authenticated", False))
     if "user" not in st.session_state or not isinstance(st.session_state.user, dict):
         st.session_state.user = {"username": "민정", "role": "user"}
     if "is_admin" not in st.session_state:
@@ -192,6 +192,70 @@ def inject_styles():
 }
 .is-hidden { display: none !important; }
 
+.st-key-chat_nav_home {
+  position: fixed;
+  top: 10px;
+  right: 220px;
+  width: 80px;
+  z-index: 10020;
+}
+.st-key-chat_nav_admin {
+  position: fixed;
+  top: 10px;
+  right: 132px;
+  width: 80px;
+  z-index: 10020;
+}
+.st-key-chat_nav_logout {
+  position: fixed;
+  top: 10px;
+  right: 24px;
+  width: 100px;
+  z-index: 10020;
+}
+.st-key-chat_nav_home button,
+.st-key-chat_nav_admin button,
+.st-key-chat_nav_logout button {
+  width: 100% !important;
+  min-height: 34px !important;
+  border-radius: 7px !important;
+  font-size: 0.78rem !important;
+  font-weight: 700 !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: #fff !important;
+}
+.st-key-chat_nav_home button {
+  border-color: #2ec5ff !important;
+  color: #2ec5ff !important;
+  box-shadow: 0 0 8px rgba(46,197,255,0.35) !important;
+}
+.st-key-chat_nav_home button:hover {
+  background: rgba(46,197,255,0.12) !important;
+  box-shadow: 0 0 12px rgba(46,197,255,0.55) !important;
+  color: #8be3ff !important;
+}
+.st-key-chat_nav_admin button {
+  border-color: #22c55e !important;
+  color: #22c55e !important;
+  box-shadow: 0 0 8px rgba(34,197,94,0.32) !important;
+}
+.st-key-chat_nav_admin button:hover {
+  background: rgba(34,197,94,0.12) !important;
+  box-shadow: 0 0 12px rgba(34,197,94,0.55) !important;
+  color: #7ee2a4 !important;
+}
+.st-key-chat_nav_logout button {
+  border-color: #ff6a3d !important;
+  color: #ff6a3d !important;
+  box-shadow: 0 0 8px rgba(255,106,61,0.34) !important;
+}
+.st-key-chat_nav_logout button:hover {
+  background: rgba(255,106,61,0.12) !important;
+  box-shadow: 0 0 12px rgba(255,106,61,0.6) !important;
+  color: #ff9b7c !important;
+}
+
 /* ══════════════════════════════════════════════════
    하단 고정 레이아웃
 
@@ -321,8 +385,7 @@ def inject_styles():
 # 4. 상단바 및 모달
 # -------------------------------------------------
 def render_navbar():
-    params = st.query_params
-    if params.get("action") == "logout":
+    def _do_logout() -> None:
         st.session_state.logged_in = False
         st.session_state.messages = []
         st.session_state.user = None
@@ -330,6 +393,7 @@ def render_navbar():
         st.session_state.access_token = None
         st.session_state.force_logged_out = True
         st.session_state.cookie_restore_attempted = False
+        st.session_state.auth_route = "home"
 
         controller = st.session_state.get("cookie_controller")
         if controller:
@@ -341,28 +405,41 @@ def render_navbar():
         st.query_params.clear()
         st.rerun()
 
+    params = st.query_params
+    if params.get("action") == "logout":
+        _do_logout()
+
     user = st.session_state.get("user")
     if not isinstance(user, dict):
         user = {}
     username = user.get("username", "민정")
     role = user.get("role", "user")
-    admin_hidden_class = "" if role == "admin" else "is-hidden"
 
     st.markdown(f"""
     <div class="nav">
-      <a href="/" target="_self" style="text-decoration:none;display:flex;align-items:center;">
+      <div style="display:flex;align-items:center;">
         <div class="logo">
           <div class="logo-dot"></div>
           <div class="logo-name">WELDPILOT AI</div>
         </div>
-      </a>
+      </div>
       <div class="menu">
         <span style="color:#9ca3af;font-size:0.85rem;margin-right:10px;">🟢 {username}님 접속 중</span>
-        <a href="/settings" target="_self" class="btn-admin {admin_hidden_class}">Admin</a>
-        <a href="/?action=logout" target="_self" class="btn-logout">Logout</a>
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    if st.button("Home", key="chat_nav_home", use_container_width=True):
+        st.session_state.auth_route = "home"
+        st.rerun()
+
+    if user.get("role") == "admin":
+        if st.button("Admin", key="chat_nav_admin", use_container_width=True):
+            st.session_state.auth_route = "settings"
+            st.rerun()
+
+    if st.button("Logout", key="chat_nav_logout", use_container_width=True):
+        _do_logout()
 
 
 @st.dialog("📋 내 채팅 목록")
@@ -542,7 +619,7 @@ def render_chat():
 def show_chat_page():
     _ensure_chat_session_state()
 
-    if (not st.session_state.get("authenticated", False)) or (not st.session_state.logged_in):
+    if not st.session_state.get("authenticated", False):
         st.markdown('<meta http-equiv="refresh" content="0; url=/">', unsafe_allow_html=True)
         st.stop()
 
