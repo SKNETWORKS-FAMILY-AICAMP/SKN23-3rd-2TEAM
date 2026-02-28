@@ -43,6 +43,10 @@ def _ensure_chat_session_state():
         st.session_state.chat_threads = {}
     if "thread_last_active" not in st.session_state:
         st.session_state.thread_last_active = {}
+    if "pending_chat_request" not in st.session_state:
+        st.session_state.pending_chat_request = None
+    if "is_generating_response" not in st.session_state:
+        st.session_state.is_generating_response = False
     if "cookie_manager" not in st.session_state:
         st.session_state.cookie_manager = stx.CookieManager()
 
@@ -403,10 +407,19 @@ def render_chat():
     </div>
     """, unsafe_allow_html=True)
 
+    is_busy = bool(st.session_state.get("pending_chat_request")) or bool(
+        st.session_state.get("is_generating_response")
+    )
+
     # ── 버튼을 chat_input보다 훨씬 앞에 선언 → stBottom과 완전 분리 ──
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("➕ 새 채팅", key="btn_new_chat", use_container_width=True):
+        if st.button(
+            "➕ 새 채팅",
+            key="btn_new_chat",
+            use_container_width=True,
+            disabled=is_busy,
+        ):
             _sync_current_thread_messages()
             new_tid = f"weld_{int(time.time())}"
             st.session_state.thread_id = new_tid
@@ -416,7 +429,12 @@ def render_chat():
             cookie_manager.set("thread_id", new_tid)
             st.rerun()
     with col2:
-        if st.button("📋 채팅 목록", key="btn_chat_list", use_container_width=True):
+        if st.button(
+            "📋 채팅 목록",
+            key="btn_chat_list",
+            use_container_width=True,
+            disabled=is_busy,
+        ):
             show_chat_list_modal()
 
     st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
@@ -459,36 +477,62 @@ def render_chat():
         user = {}
     user_id = user.get("id", "00000000-0000-0000-0000-000000000000")
 
-    # ── 입력창 (stBottom 1개만 생성) ──
-    if prompt := st.chat_input("용접 관련 조치법을 입력해주세요."):
-        current_time = time.time()
-        st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": current_time})
-        _sync_current_thread_messages()
-        _mark_current_thread_active()
+    pending_request = st.session_state.get("pending_chat_request")
+    if pending_request and not st.session_state.get("is_generating_response", False):
+        st.session_state.is_generating_response = True
+        request_prompt = pending_request.get("prompt", "")
+        request_thread_id = pending_request.get("thread_id", st.session_state.thread_id)
+        request_user_id = pending_request.get("user_id", user_id)
 
         full_text = ""
         error_text = None
 
-        with st.spinner("답변을 생성 중입니다..."):
-            for event_data in generate_agent_response(prompt, st.session_state.thread_id, user_id):
-                evt_type = event_data.get("type")
-                content = event_data.get("content", "")
-                if evt_type == "answer":
-                    full_text += content
-                elif evt_type == "error":
-                    error_text = content
-                    break
+        try:
+            with st.spinner("답변을 생성 중입니다..."):
+                for event_data in generate_agent_response(request_prompt, request_thread_id, request_user_id):
+                    evt_type = event_data.get("type")
+                    content = event_data.get("content", "")
+                    if evt_type == "answer":
+                        full_text += content
+                    elif evt_type == "error":
+                        error_text = content
+                        break
 
-        if error_text:
-            full_text = f"오류: {error_text}"
-        elif not full_text.strip():
-            full_text = "응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
+            if error_text:
+                full_text = f"오류: {error_text}"
+            elif not full_text.strip():
+                full_text = "응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
 
-        st.session_state.messages.append(
-            {"role": "assistant", "content": full_text, "timestamp": time.time()}
-        )
+            assistant_msg = {
+                "role": "assistant",
+                "content": full_text,
+                "timestamp": time.time(),
+            }
+
+            if st.session_state.thread_id == request_thread_id:
+                st.session_state.messages.append(assistant_msg)
+                _sync_current_thread_messages()
+            else:
+                st.session_state.chat_threads.setdefault(request_thread_id, []).append(assistant_msg)
+
+            st.session_state.thread_last_active[request_thread_id] = time.time()
+        finally:
+            st.session_state.pending_chat_request = None
+            st.session_state.is_generating_response = False
+
+        st.rerun()
+
+    # ── 입력창 (stBottom 1개만 생성) ──
+    if prompt := st.chat_input("용접 관련 조치법을 입력해주세요.", disabled=is_busy):
+        current_time = time.time()
+        st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": current_time})
         _sync_current_thread_messages()
         _mark_current_thread_active()
+        st.session_state.pending_chat_request = {
+            "prompt": prompt,
+            "thread_id": st.session_state.thread_id,
+            "user_id": user_id,
+        }
         st.rerun()
 
 
