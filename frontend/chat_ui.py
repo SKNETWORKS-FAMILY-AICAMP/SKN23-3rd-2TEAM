@@ -427,6 +427,44 @@ def render_navbar():
         user = {}
     username = user.get("username", "민정")
     role = user.get("role", "user")
+    is_admin = role == "admin"
+
+    # Role-aware top-right layout tuning:
+    # - Admin: Home + Admin + Logout
+    # - User: Home + Logout (Home shifts right to remove visual gap)
+    home_right = "220px" if is_admin else "132px"
+    status_right = "340px" if is_admin else "252px"
+
+    # Keep Home color consistent across roles.
+    home_color = "#2ec5ff"
+    home_glow = "rgba(46,197,255,0.35)"
+    home_hover_bg = "rgba(46,197,255,0.12)"
+    home_hover_glow = "rgba(46,197,255,0.55)"
+    home_hover_text = "#8be3ff"
+
+    st.markdown(
+        f"""
+        <style>
+        .st-key-chat_nav_home {{
+          right: {home_right} !important;
+        }}
+        .chat-online-status {{
+          right: {status_right} !important;
+        }}
+        .st-key-chat_nav_home button {{
+          border-color: {home_color} !important;
+          color: {home_color} !important;
+          box-shadow: 0 0 8px {home_glow} !important;
+        }}
+        .st-key-chat_nav_home button:hover {{
+          background: {home_hover_bg} !important;
+          box-shadow: 0 0 12px {home_hover_glow} !important;
+          color: {home_hover_text} !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown(f"""
     <div class="nav">
@@ -449,7 +487,7 @@ def render_navbar():
         st.session_state.auth_route = "home"
         st.rerun()
 
-    if user.get("role") == "admin":
+    if is_admin:
         if st.button("Admin", key="chat_nav_admin", use_container_width=True):
             st.session_state.auth_route = "settings"
             st.rerun()
