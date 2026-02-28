@@ -10,6 +10,8 @@ import extra_streamlit_components as stx
 import requests
 import streamlit as st
 from sseclient import SSEClient
+import markdown
+import base64
 
 # -------------------------------------------------
 # 1. 페이지 설정 (standalone 실행 시에만 사용)
@@ -194,21 +196,21 @@ def inject_styles():
 
 .st-key-chat_nav_home {
   position: fixed;
-  top: 10px;
+  top: 15px;
   right: 220px;
   width: 80px;
   z-index: 10020;
 }
 .st-key-chat_nav_admin {
   position: fixed;
-  top: 10px;
+  top: 15px;
   right: 132px;
   width: 80px;
   z-index: 10020;
 }
 .st-key-chat_nav_logout {
   position: fixed;
-  top: 10px;
+  top: 15px;
   right: 24px;
   width: 100px;
   z-index: 10020;
@@ -258,7 +260,7 @@ def inject_styles():
 
 .chat-online-status {
   position: fixed;
-  top: 16px;
+  top: 21px;
   right: 340px;
   z-index: 10025;
   color: #a7f3d0;
@@ -384,12 +386,59 @@ def inject_styles():
 .assistant-row .msg-time { text-align: left; margin-left: 6px; }
 
 .chat-bubble {
-  background: #fff; border-radius: 22px; padding: 1rem 1.2rem;
-  border: 1px solid rgba(0,0,0,0.08); box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-  color: #0b1116; position: relative;
+  background: #fff; 
+  border-radius: 20px; 
+  padding: 10px 16px; /* 안쪽 여백을 조금 줄여서 타이트하게 만듦 */
+  border: 1px solid rgba(0,0,0,0.08); 
+  box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+  color: #0b1116; 
+  position: relative;
+  width: fit-content; /* 글자 길이에 딱 맞춰서 말풍선 너비가 줄어들게 함 */
+  word-break: break-word;
+}
+
+/* 마크다운 변환 시 자동으로 생기는 불필요한 위아래 공백 제거 */
+.chat-text p {
+  margin: 0 !important;
+  line-height: 1.6;
 }
 .user-row .chat-bubble { border-top-right-radius: 4px; }
 .assistant-row .chat-bubble { border-top-left-radius: 4px; }
+/* ── 마크다운 표(Table) 스타일 ── */
+.chat-bubble table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  font-size: 0.9rem;
+}
+.chat-bubble th, .chat-bubble td {
+  border: 1px solid #d1d5db;
+  padding: 8px 12px;
+  text-align: left;
+}
+.chat-bubble th {
+  background-color: #f3f4f6;
+  font-weight: 700;
+}
+.chat-profile-img {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%; /* 동그랗게 */
+  margin-right: 8px;
+  vertical-align: middle; /* 텍스트랑 높이 맞춤 */
+  object-fit: cover;
+  border: 1px solid rgba(0,0,0,0.1); /* 살짝 테두리 */
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center; /* 아이콘과 글자 세로 중앙 정렬 */
+  font-size: 0.85rem;
+  color: #6b7280;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -534,13 +583,23 @@ def render_chat():
     st.markdown("""
     <div class="page-hero">
       <h1 class="headline">WELD-BOT Live Chat</h1>
-      <p class="sub">현장 이슈를 빠르게 정리하고 안전한 용접 가이드를 제공합니다.</p>
+      <p class="sub">현장 이슈를 빠르게 정리하고 안전한 로봇용접 가이드를 제공합니다.</p>
     </div>
     """, unsafe_allow_html=True)
 
     is_busy = bool(st.session_state.get("pending_chat_request")) or bool(
         st.session_state.get("is_generating_response")
     )
+
+    def get_image_base64(image_path):
+        """이미지 파일을 Base64 문자열로 변환 (수정됨: 헤더 추가)"""
+        try:
+            with open(image_path, "rb") as img_file:
+                encoded_string = base64.b64encode(img_file.read()).decode('utf-8')
+                return f"data:image/png;base64,{encoded_string}"
+        except Exception:
+            # 에러 메시지 팝업 대신 조용히 처리
+            return None
 
     # ── 버튼을 chat_input보다 훨씬 앞에 선언 → stBottom과 완전 분리 ──
     col1, col2 = st.columns(2)
@@ -571,10 +630,21 @@ def render_chat():
     st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
     last_date_str = None
 
+    # 반복문 밖에서 이미지 한 번만 불러오기 (성능 개선)
+    bot_img_base64 = get_image_base64("/Users/jy/3rd-2TEAM/SKN23-3rd-2TEAM/frontend/image/image.png") 
+    user_img_base64 = get_image_base64("/Users/jy/3rd-2TEAM/SKN23-3rd-2TEAM/frontend/image/image.png")
+
     for idx, msg in enumerate(st.session_state.messages):
         role_class = "user-row" if msg["role"] == "user" else "assistant-row"
-        label = "🧑‍🔧 User" if msg["role"] == "user" else "🤖 Chatbot"
-
+        
+        # 불러온 이미지 데이터 사용
+        if msg["role"] == "user":
+            icon_html = f'<img src="{user_img_base64}" class="chat-profile-img">' if user_img_base64 else "🧑‍🔧"
+            label = f"{icon_html} User"
+        else:
+            icon_html = f'<img src="{bot_img_base64}" class="chat-profile-img">' if bot_img_base64 else "🤖"
+            label = f"{icon_html} Chatbot"
+            
         msg_time = msg.get("timestamp", time.time())
         dt_obj = datetime.fromtimestamp(msg_time)
         current_date_str = dt_obj.strftime("%Y/%m/%d")
@@ -589,7 +659,10 @@ def render_chat():
             </div>""", unsafe_allow_html=True)
             last_date_str = current_date_str
 
-        content_for_display = html.escape(msg["content"]).replace("\n", "<br>")
+        content_for_display = markdown.markdown(
+            msg["content"], 
+            extensions=['tables', 'nl2br', 'fenced_code']
+        )
 
         st.markdown(f"""
         <div class="chat-row {role_class}">
@@ -654,7 +727,7 @@ def render_chat():
         st.rerun()
 
     # ── 입력창 (stBottom 1개만 생성) ──
-    if prompt := st.chat_input("용접 관련 조치법을 입력해주세요.", disabled=is_busy):
+    if prompt := st.chat_input("로봇용접 관련 조치법을 입력해주세요.", disabled=is_busy):
         current_time = time.time()
         st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": current_time})
         _sync_current_thread_messages()
