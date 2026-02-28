@@ -184,21 +184,23 @@ async def stream_chat_response(
         }
         await app_graph.aupdate_state(config, {"metadata": execution_metadata})
 
-        # [V4.1] chat_logs RDS 로깅 연동
-        from app.core.database import log_chat_interaction
+        # [V4.1] chat_logs RDS 로깅 연동 (LLM-as-a-Judge 평가기 탑재)
+        from app.core.security import run_llm_as_a_judge
         try:
-            # 비동기 환경 내에서 DB 저장을 위해 to_thread 또는 직접 호출
-            await asyncio.to_thread(
-                log_chat_interaction, 
-                user_id=user_id, 
-                thread_id=thread_id, 
-                query=user_message, 
-                response=assistant_msg, 
-                latency=total_elapsed
+            final_context = final_state.values.get("context", "")
+            asyncio.create_task(
+                run_llm_as_a_judge(
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    query=user_message,
+                    context=final_context,
+                    response=assistant_msg,
+                    latency=total_elapsed
+                )
             )
-            print("💾 [History] Chat interaction saved to chat_logs successfully.")
+            print("💾 [Judge] LLM-as-a-judge evaluation started asynchronously.")
         except Exception as e:
-            print(f"⚠️ [History] DB 저장 실패: {e}")
+            print(f"⚠️ [History] Eval/DB Task Error: {e}")
 
 async def run_graph_sync(
     user_message: str,

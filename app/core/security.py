@@ -154,3 +154,89 @@ async def verifier_node(state: GraphState) -> dict:
         "retry_count":       new_retry,
         "verifier_feedback": feedback,  # 통과 시 ""
     }
+
+# ============================================================
+# [LLM-as-a-Judge 비동기 평가기]
+# ============================================================
+import json
+import asyncio
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from app.core.database import log_chat_interaction
+from app.core.prompts import DEFAULT_EVAL_GEN_PROMPT, DEFAULT_EVAL_RET_PROMPT
+from app.core.config import get_model_settings
+
+async def run_llm_as_a_judge(
+    user_id: str, 
+    thread_id: str, 
+    query: str, 
+    context: str, 
+    response: str, 
+    latency: float
+):
+    """
+    답변 생성 후 비동기로 Generation & Retrieval 품질을 풀 LLM으로 평가하고 
+    최종적으로 DB의 chat_logs에 결과를 로깅합니다.
+    """
+    settings = get_model_settings()
+    eval_model = settings.get("evaluation_model", "gpt-4o")
+    gen_model = settings.get("model_accurate", "gpt-4o")
+    gen_prompt_text = DEFAULT_EVAL_GEN_PROMPT
+    ret_prompt_text = DEFAULT_EVAL_RET_PROMPT
+    
+    llm = ChatOpenAI(model=eval_model, temperature=0, model_kwargs={"response_format": {"type": "json_object"}})
+    
+    gen_score = None
+    eval_reason = ""
+    try:
+        gen_prompt = ChatPromptTemplate.from_template(gen_prompt_text)
+        gen_chain = gen_prompt | llm
+        gen_res = await gen_chain.ainvoke({
+            "user_query": query,
+            "retrieved_context": context,
+            "ai_response": response,
+            "retrieved_chunks": context
+        })
+        gen_data = json.loads(gen_res.content)
+        gen_score = int(gen_data.get("score", 0))
+        eval_reason += f"[생성] {gen_data.get('reason', '')} "
+    except Exception as e:
+        print(f"⚠️ Generation Eval Error: {e}")
+
+    ret_total = None
+    ret_relevant = None
+    ret_answerable = None
+    try:
+        ret_prompt = ChatPromptTemplate.from_template(ret_prompt_text)
+        ret_chain = ret_prompt | llm
+        ret_res = await ret_chain.ainvoke({
+            "user_query": query,
+            "retrieved_context": context,
+            "ai_response": response,
+            "retrieved_chunks": context
+        })
+        ret_data = json.loads(ret_res.content)
+        ret_total = int(ret_data.get("total_chunks", 0))
+        ret_relevant = int(ret_data.get("relevant_chunks", 0))
+        ret_answerable = bool(ret_data.get("is_answerable", False))
+        eval_reason += f"| [검색] {ret_data.get('reason', '')}"
+    except Exception as e:
+        print(f"⚠️ Retrieval Eval Error: {e}")
+
+    await asyncio.to_thread(
+        log_chat_interaction,
+        user_id=user_id,
+        thread_id=thread_id,
+        query=query,
+        response=response,
+        latency=latency,
+        generation_score=gen_score,
+        retrieval_total_chunks=ret_total,
+        retrieval_relevant_chunks=ret_relevant,
+        retrieval_is_answerable=ret_answerable,
+        eval_reason=eval_reason.strip(),
+        context=context,
+        generation_model=gen_model,
+        evaluation_model=eval_model
+    )
+    print(f"💾 [Judge] LLM-as-a-judge logs saved for thread {thread_id}")

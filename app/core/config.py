@@ -70,6 +70,7 @@ SUPPORTED_CHAT_MODELS = [
 
 DEFAULT_MODEL_FAST = os.getenv("MODEL_FAST", "gpt-5.2")      # 쿼리 재작성, 분류, 검증 (Speed)
 DEFAULT_MODEL_ACCURATE = os.getenv("MODEL_ACCURATE", "gpt-5.2")  # 실제 답변 생성 (Accuracy)
+DEFAULT_EVALUATION_MODEL = os.getenv("EVALUATION_MODEL", "gpt-4o") # LLM-as-a-judge 평가 모델
 
 _MODEL_CONFIG_LOCK = threading.Lock()
 _MODEL_CONFIG_CACHE: dict | None = None
@@ -92,6 +93,7 @@ def _default_model_settings() -> dict:
     return {
         "model_fast": _validate_model_name(DEFAULT_MODEL_FAST),
         "model_accurate": _validate_model_name(DEFAULT_MODEL_ACCURATE),
+        "evaluation_model": _validate_model_name(DEFAULT_EVALUATION_MODEL),
     }
 
 
@@ -104,8 +106,10 @@ def _read_model_settings_from_disk() -> dict:
         payload = json.loads(MODEL_CONFIG_PATH.read_text(encoding="utf-8"))
         raw_fast = payload.get("model_fast", settings["model_fast"])
         raw_accurate = payload.get("model_accurate", settings["model_accurate"])
+        raw_eval = payload.get("evaluation_model", settings["evaluation_model"])
         settings["model_fast"] = _validate_model_name(raw_fast)
         settings["model_accurate"] = _validate_model_name(raw_accurate)
+        settings["evaluation_model"] = _validate_model_name(raw_eval)
     except Exception as e:
         print(f"⚠️ 모델 설정 파일 로드 실패. 기본값으로 복구합니다: {e}")
 
@@ -135,13 +139,14 @@ def list_available_chat_models() -> list[str]:
     return list(SUPPORTED_CHAT_MODELS)
 
 
-def set_model_settings(model_fast: str | None = None, model_accurate: str | None = None) -> dict:
+def set_model_settings(model_fast: str | None = None, model_accurate: str | None = None, evaluation_model: str | None = None) -> dict:
     global _MODEL_CONFIG_CACHE, MODEL_FAST, MODEL_ACCURATE
     with _MODEL_CONFIG_LOCK:
         current = _MODEL_CONFIG_CACHE or _read_model_settings_from_disk()
         next_settings = {
             "model_fast": _validate_model_name(model_fast or current["model_fast"]),
             "model_accurate": _validate_model_name(model_accurate or current["model_accurate"]),
+            "evaluation_model": _validate_model_name(evaluation_model or current.get("evaluation_model", DEFAULT_EVALUATION_MODEL)),
         }
         _persist_model_settings(next_settings)
         _MODEL_CONFIG_CACHE = next_settings

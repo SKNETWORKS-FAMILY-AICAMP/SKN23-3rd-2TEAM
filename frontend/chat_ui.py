@@ -15,12 +15,24 @@ def generate_agent_response(user_input: str, thread_id: str, user_id: str = "Unk
     """
     API_URL = "http://localhost:8000"
     
-    # 🌟 FastAPI 백엔드로 POST 요청 전송 (BM25, LangGraph 처리 및 DB 히스토리 저장까지 백엔드에서 모두 수행)
-    response = requests.post(
-        f"{API_URL}/chat",
-        json={"message": user_input, "thread_id": thread_id, "user_id": user_id},
-        stream=True
-    )
+    try:
+        # 🌟 FastAPI 백엔드로 POST 요청 전송 (BM25, LangGraph 처리 및 DB 히스토리 저장까지 백엔드에서 모두 수행)
+        response = requests.post(
+            f"{API_URL}/chat",
+            json={"message": user_input, "thread_id": thread_id, "user_id": user_id},
+            stream=True,
+            timeout=30 # Prevent hanging forever
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        yield {"type": "error", "content": "백엔드 서버와 연결할 수 없습니다. 서버 실행 상태를 확인하세요."}
+        return
+    except requests.exceptions.HTTPError as e:
+        yield {"type": "error", "content": f"서버 오류가 발생했습니다: {e.response.status_code}"}
+        return
+    except requests.exceptions.RequestException as e:
+        yield {"type": "error", "content": f"요청 중 문제가 발생했습니다: {str(e)}"}
+        return
     
     client = SSEClient(response)
     for event in client.events():
@@ -47,9 +59,6 @@ def show_chat_page():
     username = user.get("username", "Unknown")
     role = user.get("role", "user")
     st.caption(f"🟢 접속자: **{username}** | 권한: **{role}**")
-    if role == "admin" and st.button("Admin UI로 이동", type="secondary"):
-        st.session_state.nav_selection = "Admin Dashboard"
-        st.rerun()
     st.divider()
     
     # 1. 대화 기록 초기화

@@ -143,7 +143,23 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
         print(f"❌ User Query Failed: {e}")
     return None
 
-def log_chat_interaction(user_id: str, thread_id: str, query: str, response: str, latency: float = 0.0, reranker_score: float | None = None, verifier_passed: bool | None = None):
+def log_chat_interaction(
+    user_id: str, 
+    thread_id: str, 
+    query: str, 
+    response: str, 
+    latency: float = 0.0, 
+    reranker_score: float | None = None, 
+    verifier_passed: bool | None = None,
+    generation_score: int | None = None,
+    retrieval_total_chunks: int | None = None,
+    retrieval_relevant_chunks: int | None = None,
+    retrieval_is_answerable: bool | None = None,
+    eval_reason: str | None = None,
+    context: str | None = None,
+    generation_model: str | None = None,
+    evaluation_model: str | None = None
+):
     try:
         with open_optional_ssh_tunnel() as tunnel:
             conn_args = get_connection_kwargs()
@@ -154,8 +170,14 @@ def log_chat_interaction(user_id: str, thread_id: str, query: str, response: str
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO chat_logs (user_id, thread_id, query, response, latency, reranker_score, verifier_passed) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (user_id, thread_id, query, response, latency, reranker_score, verifier_passed)
+                        """
+                        INSERT INTO chat_logs 
+                        (user_id, thread_id, query, response, latency, reranker_score, verifier_passed,
+                         generation_score, retrieval_total_chunks, retrieval_relevant_chunks, retrieval_is_answerable, eval_reason, context, generation_model, evaluation_model) 
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (user_id, thread_id, query, response, latency, reranker_score, verifier_passed,
+                         generation_score, retrieval_total_chunks, retrieval_relevant_chunks, retrieval_is_answerable, eval_reason, context, generation_model, evaluation_model)
                     )
                 conn.commit()
     except Exception as e:
@@ -172,14 +194,66 @@ def get_chat_logs(limit: int = 50) -> List[Dict[str, Any]]:
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT c.id, u.username, c.query, c.response, c.latency, c.reranker_score, c.verifier_passed, c.created_at 
+                        SELECT c.id, u.username, c.query, c.response, c.latency, 
+                               c.reranker_score, c.verifier_passed, c.created_at,
+                               c.generation_score, c.retrieval_total_chunks, c.retrieval_relevant_chunks,
+                               c.retrieval_is_answerable, c.eval_reason, c.context,
+                               c.generation_model, c.evaluation_model
                         FROM chat_logs c 
                         JOIN users u ON c.user_id = u.id 
                         ORDER BY c.created_at DESC 
                         LIMIT %s
                     """, (limit,))
                     rows = cur.fetchall()
-                    return [{"id": r[0], "username": r[1], "query": r[2], "response": r[3], "latency": r[4], "reranker_score": r[5], "verifier_passed": r[6], "timestamp": r[7]} for r in rows]
+                    return [
+                        {
+                            "id": r[0], "username": r[1], "query": r[2], "response": r[3], 
+                            "latency": r[4], "reranker_score": r[5], "verifier_passed": r[6], "timestamp": r[7],
+                            "generation_score": r[8], "retrieval_total_chunks": r[9], 
+                            "retrieval_relevant_chunks": r[10], "retrieval_is_answerable": r[11],
+                            "eval_reason": r[12], "context": r[13],
+                            "generation_model": r[14], "evaluation_model": r[15]
+                        } 
+                        for r in rows
+                    ]
     except Exception as e:
         print(f"❌ Log Query Failed: {e}")
-        return []
+        raise e
+
+# ==========================================
+# 3. Admin Settings & Evaluation Prompts
+# ==========================================
+from app.core.prompts import DEFAULT_EVAL_GEN_PROMPT, DEFAULT_EVAL_RET_PROMPT
+
+def init_admin_settings_table():
+    try:
+        with open_optional_ssh_tunnel() as tunnel:
+            conn_args = get_connection_kwargs()
+            if tunnel:
+                conn_args["host"] = tunnel["host"]
+                conn_args["port"] = tunnel["port"]
+            
+            with psycopg2.connect(**conn_args) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS admin_settings (
+                            id INT PRIMARY KEY,
+                            evaluation_model VARCHAR(255) DEFAULT 'gpt-4o',
+                            generation_prompt TEXT,
+                            retrieval_prompt TEXT,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    
+                    cur.execute("SELECT id FROM admin_settings WHERE id = 1")
+                    if not cur.fetchone():
+                        cur.execute(
+                            """
+                            INSERT INTO admin_settings (id, evaluation_model, generation_prompt, retrieval_prompt) 
+                            VALUES (1, %s, %s, %s)
+                            """,
+                            ('gpt-4o', DEFAULT_EVAL_GEN_PROMPT, DEFAULT_EVAL_RET_PROMPT)
+                        )
+                conn.commit()
+    except Exception as e:
+        print(f"❌ Admin Settings Init Failed: {e}")

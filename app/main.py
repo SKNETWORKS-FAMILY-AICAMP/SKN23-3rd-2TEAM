@@ -6,12 +6,20 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import chat
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 FastAPI Server is waking up...")
+    yield
+    print("🛑 FastAPI Server is shutting down gracefully...")
+    print("💤 Shutdown complete.")
 
 app = FastAPI(
     title="산업용 기술지원 챗봇 API",
     description="로봇/용접/전기 분야 현장 매뉴얼 기반 RAG 챗봇 (LangGraph + GPT-4o)",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS: Streamlit 프론트엔드 연동용
