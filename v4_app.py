@@ -64,7 +64,9 @@ st.session_state.cookie_controller = cookie_controller
 # 1. Initialize Navigation early to preserve URL state across reruns!
 # -------------------------------------------------------------------
 from frontend.admin_ui import show_admin_page
-from frontend.auth_ui import logout, show_auth_page
+from frontend.auth_ui import logout
+from frontend.login import show_login_page
+from frontend.signup import show_signup_page
 from frontend.chat_ui import show_chat_page
 from frontend.monitoring_ui import show_monitoring_page
 
@@ -148,8 +150,11 @@ if not st.session_state.authenticated:
         """,
         unsafe_allow_html=True,
     )
-    from frontend.auth_ui import show_auth_page
-    show_auth_page(api, API_URL)
+    auth_view = str(st.query_params.get("auth", "login")).lower()
+    if auth_view == "signup":
+        show_signup_page()
+    else:
+        show_login_page()
 else:
     # Render Custom Sidebar Elements above/below navigation
     with st.sidebar:

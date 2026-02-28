@@ -319,6 +319,16 @@ def inject_styles():
 def render_navbar():
     params = st.query_params
     if params.get("action") == "logout":
+        token = st.session_state.get("access_token")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        api = st.session_state.get("api_session")
+        if api is None:
+            api = requests.Session()
+        try:
+            api.post(f"{_get_api_url()}/auth/logout", headers=headers, timeout=5)
+        except Exception:
+            pass
+
         st.session_state.logged_in = False
         st.session_state.messages = []
         st.session_state.user = None
@@ -326,11 +336,16 @@ def render_navbar():
         st.session_state.access_token = None
         st.session_state.force_logged_out = True
         st.session_state.cookie_restore_attempted = False
+        st.session_state.api_session = requests.Session()
 
         controller = st.session_state.get("cookie_controller")
         if controller:
             try:
                 controller.remove("weld_access_token", path="/", same_site="lax")
+            except Exception:
+                pass
+            try:
+                controller.remove("weld_auth_token", path="/", same_site="lax")
             except Exception:
                 pass
 

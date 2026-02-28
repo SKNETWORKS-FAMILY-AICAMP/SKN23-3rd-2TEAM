@@ -45,6 +45,11 @@ def _clear_access_token_cookie() -> None:
         controller.remove("weld_access_token", path="/", same_site="lax")
     except Exception:
         pass
+    try:
+        # Cleanup for legacy cookie name if it exists in browser storage.
+        controller.remove("weld_auth_token", path="/", same_site="lax")
+    except Exception:
+        pass
 
 
 def show_auth_page(api, API_URL):
@@ -197,6 +202,7 @@ def logout(api, API_URL):
     st.session_state.access_token = None
     st.session_state.force_logged_out = True
     st.session_state.cookie_restore_attempted = False
+    st.session_state.logged_in = False
     _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
