@@ -2,7 +2,18 @@ from pathlib import Path
 
 import streamlit as st
 
-IMAGE_PATH = Path(__file__).resolve().parent / "image" / "streamlit1.png"
+IMAGE_DIR = Path(__file__).resolve().parent / "image"
+
+
+def _resolve_image_path() -> Path:
+    for file_name in ("streamlit1.png", "streamlit1.jpg"):
+        candidate = IMAGE_DIR / file_name
+        if candidate.exists():
+            return candidate
+    return IMAGE_DIR / "streamlit1.png"
+
+
+IMAGE_PATH = _resolve_image_path()
 
 
 def show_main_page(on_login, on_signup):
