@@ -2,7 +2,18 @@ from pathlib import Path
 
 import streamlit as st
 
-IMAGE_PATH = Path(r"/Users/jy/3rd-2TEAM/SKN23-3rd-2TEAM/frontend/image/streamlit1.png")
+IMAGE_DIR = Path(__file__).resolve().parent / "image"
+
+
+def _resolve_image_path() -> Path:
+    for file_name in ("streamlit1.png", "streamlit1.jpg"):
+        candidate = IMAGE_DIR / file_name
+        if candidate.exists():
+            return candidate
+    return IMAGE_DIR / "streamlit1.png"
+
+
+IMAGE_PATH = _resolve_image_path()
 
 
 def show_main_page_logout(on_logout, on_start_chat):
@@ -16,12 +27,6 @@ def show_main_page_logout(on_logout, on_start_chat):
     # -----------------------------
     # Navigation & Unified Style
     # -----------------------------
-    import base64
-    def get_image_base64(image_path):
-        try:
-            with open(image_path, "rb") as img_file:
-                return f"data:image/png;base64,{base64.b64encode(img_file.read()).decode('utf-8')}"
-        except Exception: return None
 
     st.markdown(
         f"""

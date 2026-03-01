@@ -182,6 +182,12 @@ def show_admin_page():
         }
         .btn-chat:hover { background: rgba(46,197,255,0.08); }
 
+        .btn-monitor {
+            color: #22c55e !important;
+            border: 1.5px solid rgba(34,197,94,0.4);
+        }
+        .btn-monitor:hover { background: rgba(34,197,94,0.08); }
+
         .btn-logout {
             color: var(--primary) !important;
             border: 1.5px solid rgba(255,106,61,0.4);
@@ -332,6 +338,7 @@ def show_admin_page():
             <div class="nav-btns">
                 <a class="btn-home" href="/?route=home" target="_self">Home</a>
                 <a class="btn-chat" href="/?route=chat" target="_self">Chat</a>
+                <a class="btn-monitor" href="/?route=monitoring" target="_self">Monitoring</a>
                 <a class="btn-logout" href="/?route=logout" target="_self">Logout</a>
             </div>
         </div>
