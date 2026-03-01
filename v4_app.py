@@ -122,6 +122,8 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user" not in st.session_state:
     st.session_state.user = None
+if "user_name" not in st.session_state:
+    st.session_state.user_name = "Unknown"
 if "api_session" not in st.session_state:
     st.session_state.api_session = requests.Session()
 if "access_token" not in st.session_state:
@@ -137,6 +139,15 @@ if "auth_route" not in st.session_state:
 # Instantiate globally for the script run
 cookie_controller = CookieController(key="weld_cookies_new")
 st.session_state.cookie_controller = cookie_controller
+
+# -------------------------------------------------------------------
+# Update session_state.user_name from token or user dict
+# -------------------------------------------------------------------
+if st.session_state.access_token:
+    payload = _decode_jwt_payload(st.session_state.access_token)
+    st.session_state.user_name = payload.get("name") or payload.get("sub") or "Unknown"
+elif st.session_state.user:
+    st.session_state.user_name = st.session_state.user.get("name") or st.session_state.user.get("username") or "Unknown"
 
 # -------------------------------------------------------------------
 # 1. Initialize Navigation early to preserve URL state across reruns!
@@ -161,7 +172,44 @@ def _set_auth_route(route: str) -> None:
     st.rerun()
 
 # -------------------------------------------------------------------
-# 2. Handle Cookies & Auth State
+# 2. Unified Query Parameter Routing
+# -------------------------------------------------------------------
+api = st.session_state.get("api_session", requests.Session())
+
+requested_route = st.query_params.get("route")
+if requested_route:
+    # 1. Handle Logout
+    if requested_route == "logout":
+        st.query_params.clear()
+        logout(api, API_URL)
+        st.stop()
+
+    # 2. Handle Public Routes
+    if requested_route in {"main", "login", "signup"}:
+        st.session_state.public_route = requested_route
+        if st.session_state.authenticated:
+            # If authenticated user visits login/signup/main, we usually stay in auth_route
+            # but we can force public_route if needed.
+            pass
+
+    # 3. Handle Authenticated Routes
+    if requested_route in {"home", "chat", "monitoring", "settings"}:
+        st.session_state.auth_route = requested_route
+
+    # Clear query params ONLY IF we are not debugging routing,
+    # but for production "clean URL" logic, we clear but ENSURE state is set.
+    # To fix F5 issue, we sync state from URL.
+    st.query_params.clear()
+    st.rerun()
+else:
+    # F5 Defense: If no route in URL, but we are authenticated,
+    # we might want to stay on the current auth_route.
+    # If the user MANUALLY types a route, the above block handles it.
+    pass
+
+
+# -------------------------------------------------------------------
+# 3. Handle Cookies & Auth State
 # -------------------------------------------------------------------
 import time
 if "cookie_initialized" not in st.session_state:
@@ -307,14 +355,22 @@ else:
 
         st.subheader("Navigation")
         if st.button("🏠 Home", width="stretch", key="side_home"):
-            _set_auth_route("home")
+            st.query_params["route"] = "home"
+            st.session_state.auth_route = "home"
+            st.rerun()
         if st.button("💬 Chatbot", width="stretch", key="side_chat"):
-            _set_auth_route("chat")
+            st.query_params["route"] = "chat"
+            st.session_state.auth_route = "chat"
+            st.rerun()
         if role == "admin":
             if st.button("📊 RAG Monitoring", width="stretch", key="side_monitoring"):
-                _set_auth_route("monitoring")
+                st.query_params["route"] = "monitoring"
+                st.session_state.auth_route = "monitoring"
+                st.rerun()
             if st.button("⚙️ System Settings", width="stretch", key="side_settings"):
-                _set_auth_route("settings")
+                st.query_params["route"] = "settings"
+                st.session_state.auth_route = "settings"
+                st.rerun()
 
         token = st.session_state.access_token
         with st.expander("Auth Token"):

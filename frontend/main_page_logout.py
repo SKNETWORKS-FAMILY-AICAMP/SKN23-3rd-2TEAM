@@ -11,170 +11,130 @@ def show_main_page_logout(on_logout, on_start_chat):
         on_logout()
         return
 
-    user = st.session_state.get("user")
-    username = user.get("username") if isinstance(user, dict) else "사용자"
+    username = st.session_state.get("user_name", "사용자")
+
+    # -----------------------------
+    # Navigation & Unified Style
+    # -----------------------------
+    import base64
+    def get_image_base64(image_path):
+        try:
+            with open(image_path, "rb") as img_file:
+                return f"data:image/png;base64,{base64.b64encode(img_file.read()).decode('utf-8')}"
+        except Exception: return None
 
     st.markdown(
-        """
+        f"""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;500;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap');
 
-        :root {
+        :root {{
             --nav-h: 64px;
             --line: rgba(120, 190, 220, 0.20);
             --primary: #ff6a3d;
             --secondary: #2ec5ff;
-        }
+        }}
 
-        html, body { margin: 0 !important; padding: 0 !important; }
+        html, body {{ margin: 0 !important; padding: 0 !important; }}
+        [data-testid="stHeader"], [data-testid="stToolbar"] {{ display: none !important; }}
+        .stApp {{ background-color: #f2f2f2; }}
+        [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"] {{
+            padding-top: 0 !important; margin-top: 0 !important;
+        }}
 
-        [data-testid="stHeader"],
-        [data-testid="stToolbar"] { display: none !important; }
-
-        .stApp { background-color: #f2f2f2; }
-
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"],
-        [data-testid="stMainBlockContainer"] {
-            padding-top: 0 !important;
-            margin-top: 0 !important;
-        }
-
-        .block-container {
-            max-width: 100%;
-            padding: 0 0 2rem 0;
-        }
-
-        .nav {
-            display: flex;
-            align-items: center;
-            height: var(--nav-h);
-            position: fixed;
+        .nav {{
+            display: flex; align-items: center; justify-content: space-between;
+            height: var(--nav-h); position: fixed;
             top: 0; left: 0; right: 0;
             padding: 0 32px 0 24px;
-            background: #000;
-            border-bottom: 1px solid var(--line);
-            z-index: 9998;
-        }
+            background: #000 !important; border-bottom: 1px solid var(--line); z-index: 9998;
+        }}
 
-        .logo { display: flex; align-items: center; gap: 10px; }
-
-        .logo-dot {
-            width: 14px; height: 14px;
-            border-radius: 50%;
+        .logo {{ display: flex; align-items: center; gap: 10px; font-family: 'Chakra Petch', sans-serif; text-decoration: none !important; color: inherit !important; }}
+        .logo-dot {{
+            width: 14px; height: 14px; border-radius: 50%;
             background: linear-gradient(135deg, var(--secondary), var(--primary));
             box-shadow: 0 0 20px rgba(46,197,255,0.8);
-        }
+        }}
+        .logo-name {{ font-size: 0.95rem; font-weight: 600; color: #dbf5ff !important; letter-spacing: 0.08em; }}
 
-        .logo-name {
-            font-size: 0.95rem;
-            font-weight: 650;
-            color: #dbf5ff;
-            letter-spacing: 0.08em;
-        }
-
-        .nav-btns {
-            display: flex;
-            gap: 10px;
-            margin-left: auto;
-            align-items: center;
-        }
-
-        .nav-btns a {
-            display: inline-block;
-            padding: 7px 18px;
-            border-radius: 8px;
-            font-size: 0.84rem;
-            font-weight: 700;
-            text-decoration: none;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-
-        .btn-user {
-            background: #fff;
-            color: #000 !important;
-            border: 1.5px solid rgba(0,0,0,0.15);
-        }
-
-        .btn-logout {
-            background: #000;
-            color: #fff !important;
-            border: 1.5px solid #000;
-        }
-
-        .btn-logout:hover { background: #111; }
-
-        .content-spacer { height: calc(var(--nav-h) + 10px); }
-
-        .st-key-home_nav_chat {
-            position: fixed;
-            top: 15px;
-            right: 132px;
-            width: 80px;
-            z-index: 10020;
-        }
-        .st-key-home_nav_logout {
-            position: fixed;
-            top: 15px;
-            right: 24px;
-            width: 100px;
-            z-index: 10020;
-        }
-        .st-key-home_nav_chat button,
-        .st-key-home_nav_logout button {
-            width: 100% !important;
-            min-height: 34px !important;
-            border-radius: 7px !important;
-            font-size: 0.78rem !important;
+        /* Status & Header Spacing */
+        .chat-online-status-header {{
+            position: fixed !important; 
+            top: 22px !important; 
+            right: 160px !important;
+            color: #a7f3d0 !important; 
+            font-size: 0.83rem !important; 
             font-weight: 700 !important;
-            border: 1px solid rgba(255,255,255,0.35) !important;
-            background: transparent !important;
-            color: #fff !important;
-        }
-        .st-key-home_nav_chat button:hover,
-        .st-key-home_nav_logout button:hover {
-            background: rgba(255,255,255,0.14) !important;
-            color: #fff !important;
-        }
+            text-shadow: 0 0 10px rgba(34,197,94,0.28);
+            white-space: nowrap; 
+            z-index: 10000 !important;
+        }}
 
-        .stButton > button {
-            background: #000 !important;
-            color: #fff !important;
-            border: 1px solid #000 !important;
-        }
+        .content-spacer {{ height: calc(var(--nav-h) + 60px); }}
 
-        .stButton > button:hover {
-            background: #111 !important;
-            color: #fff !important;
-        }
+        /* Navigation Buttons */
+        .st-key-home_nav_logout {{ position: fixed; top: 15px; right: 24px; width: 100px; z-index: 10020; }}
+
+        .st-key-home_nav_logout button {{
+            width: 100% !important; min-height: 34px !important;
+            border-radius: 7px !important; font-size: 0.78rem !important;
+            font-weight: 700 !important; border: 1.5px solid var(--primary) !important;
+            background: transparent !important; color: var(--primary) !important;
+            transition: all 0.2s;
+        }}
+
+        .st-key-home_nav_logout button:hover {{
+            background: rgba(255,106,61,0.12) !important;
+            box-shadow: 0 0 12px rgba(255,106,61,0.2);
+        }}
+
+        /* Start Button Custom Styling */
+        div.stButton > button[kind="secondary"] {{
+            /* Fallback selector if key fails */
+        }}
+        
+        .st-key-home_start_btn button {{
+            background-color: #000000 !important;
+            color: #ffffff !important;
+            border: 1px solid #000000 !important;
+            font-weight: 700 !important;
+            height: 48px !important;
+            font-size: 1.1rem !important;
+            border-radius: 8px !important;
+            transition: all 0.3s !important;
+        }}
+        .st-key-home_start_btn button:hover {{
+            background-color: #333333 !important;
+            border-color: #333333 !important;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }}
+
+        /* Utility to hide legacy elements */
+        .chat-online-status, .st-key-home_nav_chat, .st-key-home_nav_admin {{ display: none !important; }}
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
-    st.markdown(
-        f"""
         <div class="nav">
-            <div class="logo">
+            <a class="logo" href="/?route=home" target="_self">
                 <div class="logo-dot"></div>
                 <div class="logo-name">WELDPILOT AI</div>
-            </div>
-            <div class="nav-btns">
-                <span class="btn-user">{username}</span>
+            </a>
+            <div class="chat-online-status-header">
+                🟢 {username}님 접속 중
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if st.button("채팅", key="home_nav_chat", use_container_width=True):
-        on_start_chat()
-        st.stop()
+    if st.button("Logout", key="home_nav_logout"):
+        st.query_params["route"] = "logout"
+        st.rerun()
 
-    if st.button("로그아웃", key="home_nav_logout", use_container_width=True):
-        on_logout()
-        st.stop()
+    # CSS adjustment: hide the other nav keys if rendered by mistake
+    st.markdown("<style>.st-key-home_nav_chat, .st-key-home_nav_admin, .chat-online-status { display:none !important; }</style>", unsafe_allow_html=True)
 
     st.markdown("<div class='content-spacer'></div>", unsafe_allow_html=True)
 
@@ -184,7 +144,7 @@ def show_main_page_logout(on_logout, on_start_chat):
         with title_col:
             st.markdown(
                 """
-                <h1 style='text-align:center; font-size:48px; margin:0 0 18px 0; transform: translateX(14px);'>
+                <h1 style='text-align:center; font-size:48px; margin:0 0 18px 0;'>
                   데이터 기반 WELDPILOT과 함께하세요.
                 </h1>
                 """,
@@ -200,9 +160,9 @@ def show_main_page_logout(on_logout, on_start_chat):
                 unsafe_allow_html=True,
             )
 
-        btn_col = st.columns([1, 1, 1])[1]
-        with btn_col:
-            if st.button("지금 시작하세요.", use_container_width=True):
+        btn_container = st.columns([1, 1, 1])[1]
+        with btn_container:
+            if st.button("지금 시작하세요.", key="home_start_btn", use_container_width=True):
                 on_start_chat()
                 st.stop()
 

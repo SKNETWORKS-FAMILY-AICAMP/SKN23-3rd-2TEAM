@@ -49,16 +49,30 @@ def _ensure_chat_session_state():
         st.session_state.pending_chat_request = None
     if "is_generating_response" not in st.session_state:
         st.session_state.is_generating_response = False
-    if "cookie_manager" not in st.session_state:
-        st.session_state.cookie_manager = stx.CookieManager()
 
-    cookie_manager = st.session_state.cookie_manager
+    # Single source of truth: reusing manager from v4_app.py session_state
+    cookie_manager = st.session_state.get("cookie_manager_auth")
+    if not cookie_manager:
+        # Fallback if somehow not initialized, but v4_app should handle this
+        try:
+            cookie_manager = stx.CookieManager(key="weld_cookie_manager_auth")
+            st.session_state.cookie_manager_auth = cookie_manager
+        except Exception:
+            pass
+    
+    st.session_state.cookie_manager = cookie_manager
 
     if "thread_id" not in st.session_state:
         saved_tid = cookie_manager.get(cookie="thread_id")
-        st.session_state.thread_id = saved_tid if saved_tid else f"weld_{int(time.time())}"
-        if not saved_tid:
-            cookie_manager.set("thread_id", st.session_state.thread_id)
+        if saved_tid:
+            st.session_state.thread_id = saved_tid
+        else:
+            new_tid = f"weld_{int(time.time())}"
+            st.session_state.thread_id = new_tid
+            try:
+                cookie_manager.set("thread_id", new_tid)
+            except Exception:
+                pass
 
     if st.session_state.thread_id not in st.session_state.chat_threads:
         st.session_state.chat_threads[st.session_state.thread_id] = list(st.session_state.messages)
@@ -100,7 +114,7 @@ def generate_agent_response(user_input: str, thread_id: str, user_id: str):
             f"{api_url}/chat",
             json={"message": user_input, "thread_id": thread_id, "user_id": user_id},
             stream=True,
-            timeout=30,
+            timeout=120,
         )
         response.raise_for_status()
     except requests.exceptions.ConnectionError:
@@ -462,6 +476,7 @@ def render_navbar():
         if controller:
             try:
                 controller.remove("weld_access_token", path="/", same_site="lax")
+                controller.set("weld_access_token", "", max_age=0, path="/")
             except Exception:
                 pass
         backup_manager = st.session_state.get("cookie_manager_auth")
@@ -471,7 +486,10 @@ def render_navbar():
             except Exception:
                 pass
 
+        import time
         st.query_params.clear()
+        st.query_params["public"] = "main"
+        time.sleep(0.5)
         st.rerun()
 
     params = st.query_params
@@ -534,17 +552,20 @@ def render_navbar():
     </div>
     """, unsafe_allow_html=True)
 
+    username = st.session_state.get("user_name", "Unknown")
     st.markdown(
         f'<div class="chat-online-status">🟢 {username}님 접속 중</div>',
         unsafe_allow_html=True,
     )
 
     if st.button("Home", key="chat_nav_home", use_container_width=True):
+        st.query_params["route"] = "home"
         st.session_state.auth_route = "home"
         st.rerun()
-
+ 
     if is_admin:
         if st.button("Admin", key="chat_nav_admin", use_container_width=True):
+            st.query_params["route"] = "settings"
             st.session_state.auth_route = "settings"
             st.rerun()
 

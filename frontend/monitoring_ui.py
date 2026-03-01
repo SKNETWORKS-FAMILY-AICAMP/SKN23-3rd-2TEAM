@@ -4,6 +4,141 @@ import streamlit as st
 from app.core.database import get_chat_logs
 
 def show_monitoring_page():
+    # -----------------------------
+    # Navigation & Style
+    # -----------------------------
+    username = st.session_state.get("user_name", "관리자")
+    role = st.session_state.get("user", {}).get("role", "admin")
+
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;500;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap');
+
+        :root {
+            --nav-h: 64px;
+            --line: rgba(120, 190, 220, 0.20);
+            --primary: #ff6a3d;
+            --secondary: #2ec5ff;
+        }
+
+        html, body { margin: 0 !important; padding: 0 !important; }
+        [data-testid="stHeader"], [data-testid="stToolbar"] { display: none !important; }
+        .stApp { background-color: #f2f2f2; }
+        [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+            padding-top: 0 !important; margin-top: 0 !important;
+        }
+
+        .nav {
+            display: flex; align-items: center; justify-content: space-between;
+            height: var(--nav-h); position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 0 32px 0 24px;
+            background: #000; border-bottom: 1px solid var(--line); z-index: 9998;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; font-family: 'Chakra Petch', sans-serif; text-decoration: none !important; }
+        .logo-dot {
+            width: 14px; height: 14px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--secondary), var(--primary));
+            box-shadow: 0 0 20px rgba(46,197,255,0.8);
+        }
+        .logo-name { font-size: 0.95rem; font-weight: 600; color: #dbf5ff; letter-spacing: 0.08em; }
+
+        .chat-online-status {
+            position: fixed; top: 21px; right: 410px; z-index: 10025;
+            color: #a7f3d0; font-size: 0.83rem; font-weight: 700;
+            letter-spacing: 0.01em; pointer-events: none;
+            text-shadow: 0 0 10px rgba(34,197,94,0.28);
+            white-space: nowrap;
+        }
+
+        .content-spacer { height: calc(var(--nav-h) + 20px); }
+
+        /* Navigation Buttons */
+        .st-key-mon_nav_home { position: fixed; top: 15px; right: 300px; width: 80px; z-index: 10020; }
+        .st-key-mon_nav_chat { position: fixed; top: 15px; right: 212px; width: 80px; z-index: 10020; }
+        .st-key-mon_nav_admin { position: fixed; top: 15px; right: 124px; width: 80px; z-index: 10020; }
+        .st-key-mon_nav_logout { position: fixed; top: 15px; right: 24px; width: 90px; z-index: 10020; }
+
+        .st-key-mon_nav_home button, .st-key-mon_nav_chat button, .st-key-mon_nav_admin button, .st-key-mon_nav_logout button {
+            width: 100% !important; min-height: 34px !important;
+            border-radius: 7px !important; font-size: 0.78rem !important;
+            font-weight: 700 !important; border: 1px solid transparent !important;
+            background: transparent !important;
+        }
+
+        .st-key-mon_nav_home button { border-color: #fff !important; color: #fff !important; }
+        .st-key-mon_nav_home button:hover { background: rgba(255,255,255,0.1) !important; }
+
+        .st-key-mon_nav_chat button { border-color: var(--secondary) !important; color: var(--secondary) !important; }
+        .st-key-mon_nav_chat button:hover { background: rgba(46,197,255,0.1) !important; }
+        
+        .st-key-mon_nav_admin button { border-color: #22c55e !important; color: #22c55e !important; }
+        .st-key-mon_nav_admin button:hover { background: rgba(34,197,94,0.1) !important; }
+
+        .st-key-mon_nav_logout button { border-color: var(--primary) !important; color: var(--primary) !important; }
+        .st-key-mon_nav_logout button:hover { background: rgba(255,106,61,0.1) !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Standard Nav Bar
+    st.markdown(
+        f"""
+        <div class="nav">
+            <a class="logo" href="/?route=home" target="_self">
+                <div class="logo-dot"></div>
+                <div class="logo-name">WELDPILOT AI</div>
+            </a>
+            <div class="header-right">
+                <span class="chat-online-status-header-mon">🟢 {username}님 접속 중</span>
+            </div>
+        </div>
+        <style>
+        .header-right {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-left: auto;
+            position: absolute;
+            right: 480px; /* Offset for the 4 buttons */
+            top: 50%;
+            transform: translateY(-50%);
+        }}
+        .chat-online-status-header-mon {{
+            color: #a7f3d0;
+            font-size: 0.83rem;
+            font-weight: 700;
+            text-shadow: 0 0 10px rgba(34,197,94,0.28);
+            white-space: nowrap;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Render Navigation Buttons
+    if st.button("Home", key="mon_nav_home"):
+        st.query_params["route"] = "home"
+        st.session_state.auth_route = "home"
+        st.rerun()
+    if st.button("Chat", key="mon_nav_chat"):
+        st.query_params["route"] = "chat"
+        st.session_state.auth_route = "chat"
+        st.rerun()
+    if role == "admin":
+        if st.button("Admin", key="mon_nav_admin"):
+            st.query_params["route"] = "settings"
+            st.session_state.auth_route = "settings"
+            st.rerun()
+    if st.button("Logout", key="mon_nav_logout"):
+        st.query_params["route"] = "logout"
+        st.rerun()
+
+    st.markdown("<div class='content-spacer'></div>", unsafe_allow_html=True)
     st.title("📊 RAG 품질 모니터링")
     st.caption("AI 심판(LLM-as-a-Judge)이 측정한 시스템 건강 상태 및 오답 감점 사유 로그입니다.")
 

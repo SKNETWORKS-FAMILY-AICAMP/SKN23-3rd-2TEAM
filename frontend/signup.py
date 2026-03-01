@@ -175,7 +175,7 @@ def show_signup_page(api, api_url, on_login):
     st.markdown(
         """
         <div class="nav">
-            <a class="logo-btn" href="/?public=main" target="_self">
+            <a class="logo-btn" href="/?route=main" target="_self">
                 <div class="logo-dot"></div>
                 <div class="logo-name">WELDPILOT AI</div>
             </a>
@@ -185,7 +185,8 @@ def show_signup_page(api, api_url, on_login):
     )
 
     if st.button("로그인", key="signup_nav_login", use_container_width=True):
-        on_login()
+        st.query_params["route"] = "login"
+        st.rerun()
 
     st.markdown("<div style='height: calc(64px + 3vh);'></div>", unsafe_allow_html=True)
 
@@ -239,7 +240,7 @@ def show_signup_page(api, api_url, on_login):
                 try:
                     response = api.post(
                         f"{api_url}/auth/signup",
-                        data={"username": user_id, "password": password},
+                        data={"username": user_id, "password": password, "name": name},
                         timeout=10,
                     )
                 except Exception as exc:

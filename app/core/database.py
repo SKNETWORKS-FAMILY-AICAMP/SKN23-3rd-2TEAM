@@ -104,7 +104,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 # ==========================================
 # 2. User & Chat Logging
 # ==========================================
-def create_user(username: str, password: str, role: str = "user") -> bool:
+def create_user(username: str, password: str, name: str = "", role: str = "user") -> bool:
     hashed = hash_password(password)
     try:
         with open_optional_ssh_tunnel() as tunnel:
@@ -116,8 +116,8 @@ def create_user(username: str, password: str, role: str = "user") -> bool:
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
-                        (username, hashed, role)
+                        "INSERT INTO users (username, password_hash, name, role) VALUES (%s, %s, %s, %s)",
+                        (username, hashed, name, role)
                     )
                 conn.commit()
         return True
@@ -135,10 +135,16 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             
             with psycopg2.connect(**conn_args) as conn:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT id, username, password_hash, role FROM users WHERE username = %s", (username,))
+                    cur.execute("SELECT id, username, password_hash, role, name FROM users WHERE username = %s", (username,))
                     row = cur.fetchone()
                     if row:
-                        return {"id": str(row[0]), "username": row[1], "password": row[2], "role": row[3]}
+                        return {
+                            "id": str(row[0]), 
+                            "username": row[1], 
+                            "password": row[2], 
+                            "role": row[3],
+                            "name": row[4] or row[1] # Fallback to username if name is empty
+                        }
     except Exception as e:
         print(f"❌ User Query Failed: {e}")
     return None

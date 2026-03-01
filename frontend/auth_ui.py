@@ -39,11 +39,11 @@ def _save_access_token_cookie(token: str) -> None:
 
 def _clear_access_token_cookie() -> None:
     controller = st.session_state.get("cookie_controller")
-    if not controller:
-        pass
-    else:
+    if controller:
         try:
+            # Force expiration using both remove and set(max_age=0)
             controller.remove("weld_access_token", path="/", same_site="lax")
+            controller.set("weld_access_token", "", max_age=0, path="/")
         except Exception:
             pass
 
@@ -211,5 +211,11 @@ def logout(api, API_URL):
     _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
+    
+    # Deterministic redirect: clear all and set public to main
     st.query_params.clear()
+    st.query_params["public"] = "main"
+    
+    import time
+    time.sleep(0.5)
     st.rerun()

@@ -120,12 +120,14 @@ def show_main_page(on_login, on_signup):
         """
         <div class="nav">
             <div class="logo">
-                <div class="logo-dot"></div>
-                <div class="logo-name">WELDPILOT AI</div>
+                <a href="/?route=main" target="_self" style="text-decoration:none; display:flex; align-items:center; gap:10px;">
+                    <div class="logo-dot"></div>
+                    <div class="logo-name">WELDPILOT AI</div>
+                </a>
             </div>
             <div class="nav-btns">
-                <a class="btn-login" href="/?public=login" target="_self">로그인</a>
-                <a class="btn-signup" href="/?public=signup" target="_self">회원가입</a>
+                <a class="btn-login" href="/?route=login" target="_self">로그인</a>
+                <a class="btn-signup" href="/?route=signup" target="_self">회원가입</a>
             </div>
         </div>
         """,
@@ -159,7 +161,8 @@ def show_main_page(on_login, on_signup):
         btn_col = st.columns([1, 1, 1])[1]
         with btn_col:
             if st.button("지금 시작하세요.", use_container_width=True):
-                on_login()
+                st.query_params["route"] = "login"
+                st.rerun()
 
         st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
 
