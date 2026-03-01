@@ -114,11 +114,25 @@ async def stream_chat_response(
         # ── astream_events: LangGraph v2 이벤트 스트리밍 ──
         # In dict inputs, LangGraph merges states. Since `messages` has `add_messages`
         # annotator, passing a new list will append to the existing threads.
-        async for event in app_graph.astream_events(
+        event_iter = app_graph.astream_events(
             initial_state,
             config=config,
             version="v2",
-        ):
+        ).__aiter__()
+
+        while True:
+            try:
+                # 그래프 노드가 길어질 때도 SSE 연결이 끊기지 않도록 주기적으로 하트비트를 전송합니다.
+                event = await asyncio.wait_for(event_iter.__anext__(), timeout=15.0)
+            except asyncio.TimeoutError:
+                yield json.dumps({
+                    'type': 'status',
+                    'content': '⏳ 답변 생성을 계속 진행 중입니다...'
+                })
+                continue
+            except StopAsyncIteration:
+                break
+
             event_kind = event.get("event", "")
             node_name = event.get("metadata", {}).get("langgraph_node", "")
             if not node_name:
