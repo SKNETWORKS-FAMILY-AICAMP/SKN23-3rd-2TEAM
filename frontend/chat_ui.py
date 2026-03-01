@@ -108,6 +108,7 @@ def _get_api_url() -> str:
 
 def generate_agent_response(user_input: str, thread_id: str, user_id: str):
     api_url = _get_api_url()
+    response = None
 
     try:
         response = requests.post(
@@ -127,14 +128,30 @@ def generate_agent_response(user_input: str, thread_id: str, user_id: str):
         yield {"type": "error", "content": f"요청 중 문제가 발생했습니다: {str(e)}"}
         return
 
-    client = SSEClient(response)
-    for event in client.events():
-        if event.data == "[DONE]":
-            break
-        try:
-            yield json.loads(event.data)
-        except json.JSONDecodeError:
-            yield {"type": "answer", "content": event.data}
+    try:
+        client = SSEClient(response)
+        for event in client.events():
+            if event.data == "[DONE]":
+                break
+            try:
+                yield json.loads(event.data)
+            except json.JSONDecodeError:
+                yield {"type": "answer", "content": event.data}
+    except requests.exceptions.ReadTimeout:
+        yield {
+            "type": "error",
+            "content": "응답 생성 시간이 길어 연결이 시간 초과되었습니다. 잠시 후 다시 시도해주세요.",
+        }
+    except requests.exceptions.RequestException as e:
+        yield {"type": "error", "content": f"스트리밍 연결 오류: {str(e)}"}
+    except Exception as e:
+        yield {"type": "error", "content": f"스트리밍 처리 중 오류: {str(e)}"}
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
 
 
 # -------------------------------------------------

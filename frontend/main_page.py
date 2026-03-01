@@ -2,7 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
-IMAGE_PATH = Path(r"/Users/jy/3rd-2TEAM/SKN23-3rd-2TEAM/frontend/image/streamlit1.png")
+IMAGE_PATH = Path(__file__).resolve().parent / "image" / "streamlit1.png"
 
 
 def show_main_page(on_login, on_signup):
