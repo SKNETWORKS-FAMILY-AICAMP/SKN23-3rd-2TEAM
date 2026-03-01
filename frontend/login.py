@@ -119,7 +119,7 @@ def show_login_page(api, api_url, on_back, on_signup):
     st.markdown(
         """
         <div class="nav">
-            <a class="logo-btn" href="/?public=main" target="_self">
+            <a class="logo-btn" href="/?route=main" target="_self">
                 <div class="logo-dot"></div>
                 <div class="logo-name">WELDPILOT AI</div>
             </a>
@@ -187,6 +187,7 @@ def show_login_page(api, api_url, on_back, on_signup):
                         return
 
                     st.session_state.user = data.get("user")
+                    st.session_state.user_name = st.session_state.user.get("name") or st.session_state.user.get("username") or "Unknown"
                     st.session_state.access_token = token
                     st.session_state.authenticated = True
                     st.session_state.force_logged_out = False
@@ -231,6 +232,13 @@ def show_login_page(api, api_url, on_back, on_signup):
                             pass
 
                     st.success(f"✅ 로그인 성공: {user_id}")
+                    
+                    # Clean up URL and set home route
+                    st.query_params.pop("public", None)
+                    st.query_params["route"] = "home"
+                    
+                    import time
+                    time.sleep(0.5)
                     st.rerun()
 
         if signup_clicked:

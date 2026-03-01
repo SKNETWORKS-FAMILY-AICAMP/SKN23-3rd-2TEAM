@@ -70,7 +70,7 @@ def db_get_oauth_user(username: str) -> dict | None:
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role FROM users WHERE username = %s",
+                "SELECT id, username, password_hash, role, name FROM users WHERE username = %s",
                 (username,),
             )
             row = cur.fetchone()
@@ -81,18 +81,19 @@ def db_get_oauth_user(username: str) -> dict | None:
         "username": row[1],
         "password": row[2],
         "role": row[3],
+        "name": row[4] or row[1],
     }
 
-def db_create_oauth_user(username: str, role: str = "user") -> bool:
+def db_create_oauth_user(username: str, name: str = "", role: str = "user") -> bool:
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO users (username, password_hash, role)
-                VALUES (%s, %s, %s)
+                INSERT INTO users (username, password_hash, name, role)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (username) DO NOTHING
                 """,
-                (username, "", role),
+                (username, "", name or username, role),
             )
             created = cur.rowcount == 1
         conn.commit()
@@ -172,7 +173,7 @@ async def login(response: Response, username: str = Form(...), password: str = F
         )
 
     access_token = create_access_token(
-        data={"sub": user["username"], "id": user["id"], "role": user["role"]},
+        data={"sub": user["username"], "id": user["id"], "role": user["role"], "name": user["name"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -183,13 +184,14 @@ async def login(response: Response, username: str = Form(...), password: str = F
         "user": {
             "id": user["id"],
             "username": user["username"],
-            "role": user["role"]
+            "role": user["role"],
+            "name": user["name"]
         },
         "weld_auth_token": access_token,
     }
 
 @router.post("/signup")
-async def signup(username: str = Form(...), password: str = Form(...), admin_code: Optional[str] = Form(None)):
+async def signup(username: str = Form(...), password: str = Form(...), name: str = Form(""), admin_code: Optional[str] = Form(None)):
     from app.core.config import ADMIN_SECRET_KEY
 
     role = "user"
@@ -203,8 +205,8 @@ async def signup(username: str = Form(...), password: str = Form(...), admin_cod
                 raise HTTPException(status_code=400, detail="Username already exists")
 
             cur.execute(
-                "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
-                (username, hash_password(password), role)
+                "INSERT INTO users (username, password_hash, name, role) VALUES (%s, %s, %s, %s)",
+                (username, hash_password(password), name or username, role)
             )
         conn.commit()
     return {"message": "Signup successful"}
@@ -225,7 +227,8 @@ async def get_me(request: Request, weld_auth_token: Optional[str] = Cookie(None)
         return {
             "id": payload.get("id"),
             "username": payload.get("sub"),
-            "role": payload.get("role")
+            "role": payload.get("role"),
+            "name": payload.get("name", payload.get("sub"))
         }
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -285,7 +288,7 @@ async def oauth_exchange(response: Response, code: str = Form(...)):
         raise HTTPException(status_code=404, detail="User not found")
 
     access_token = create_access_token(
-        data={"sub": user["username"], "id": user["id"], "role": user["role"]},
+        data={"sub": user["username"], "id": user["id"], "role": user["role"], "name": user["name"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 
@@ -295,7 +298,8 @@ async def oauth_exchange(response: Response, code: str = Form(...)):
         "user": {
             "id": user["id"],
             "username": user["username"],
-            "role": user["role"]
+            "role": user["role"],
+            "name": user["name"]
         },
         "weld_auth_token": access_token
     }

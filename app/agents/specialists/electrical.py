@@ -7,6 +7,7 @@
 #   from app.rag.pipeline import run_rag_pipeline          -- RAG 문서 검색
 #   from app.core.security import verify_hallucination     -- 환각 검증 (선택 사용)
 # ============================================================
+import asyncio
 from app.rag.pipeline import run_rag_pipeline
 from app.core.security import verify_hallucination
 from langchain_core.prompts import ChatPromptTemplate
@@ -47,7 +48,7 @@ async def electrical_node(state: GraphState) -> dict:
     search_query = state.get("rewritten_query") or original_query
     print(f"[Electrical] 검색 쿼리: '{search_query}'")
 
-    context, max_score = run_rag_pipeline(search_query, domain="ELECTRICAL")
+    context, max_score = await asyncio.to_thread(run_rag_pipeline, search_query, domain="ELECTRICAL")
 
     # 제로히트(Zero-hit) 조기 종료
     if not context or len(context.strip()) < 30:
