@@ -21,7 +21,25 @@
 본 개발은 LLM 기반 문서 분석 및 생성 기술을 적용하여, 로봇 용접 매뉴얼을 자동으로 생성·요약하고, 상황별 가이드를 제공하여 제조업에 뛰어드는 지원자, 신입은 물론 숙련자들에게도 도움을 줄 수 있는 시스템을 구현하는 것을 목표로 한다.  
 # 3. 기술 스택 및 사용 모델
 ## 기술스택
-<img src="https://img.shields.io/badge/python-3776AB?style=for-the-badge&logo=python&logoColor=white"><img src="https://img.shields.io/badge/streamlit-red?style=for-the-badge&logo=streamlit&logoColor=white"><img src="https://img.shields.io/badge/postgresql-blue?style=for-the-badge&logo=streamlit&logoColor=white"><img src="https://img.shields.io/badge/Pinecone-green?style=for-the-badge&logoColor=white"><img src="https://img.shields.io/badge/git-black?style=for-the-badge&logo=git&logoColor=white"><img src="https://img.shields.io/badge/amazone EC2-red?style=for-the-badge&logoColor=white"><img src="https://img.shields.io/badge/openai-blue?style=for-the-badge&logo=openaigym&logoColor=white"> 
+| 영역 | 스택 |
+|---|---|
+| Language | Python 3.12 |
+| Backend API | FastAPI, Uvicorn, Pydantic |
+| Frontend | Streamlit, Requests |
+| LLM Orchestration | LangChain, LangGraph |
+| LLM/Embedding | OpenAI Chat Models (gpt-5.x/gpt-4o), text-embedding-3-small |
+| Retrieval | PostgreSQL (pgvector), BM25(rank-bm25), EnsembleRetriever |
+| Reranker | BAAI/bge-reranker-v2-m3, sentence-transformers, torch |
+| Auth | JWT(python-jose), OAuth(Authlib), Session/Cookie |
+| Data Ingestion | marker, pypdf, pymupdf4llm |
+| Infra | AWS S3(boto3), SSH Tunnel(sshtunnel/paramiko), Poetry |
+
+## 사용 모델
+- `model_fast`: 기본 `gpt-5.2` (재작성/분류/검증)
+- `model_accurate`: 기본 `gpt-5.2` (최종 답변 생성)
+- `evaluation_model`: 기본 `gpt-4o` (LLM-as-a-Judge)
+- Embedding: `text-embedding-3-small`
+- Reranker: `BAAI/bge-reranker-v2-m3` (로컬 파일 기반)
 
 # 4. 아키텍쳐 및 플로우차트
 
@@ -34,12 +52,12 @@ graph TD
         FE <--> API_Chat[SSE /chat]
         API_Chat --> Graph[LangGraph Workflow]
         Graph --> Reranker[Singleton GPU Reranker]
-        Reranker --> Hybrid[Hybrid Search: BM25 + pinecone]
+        Reranker --> Hybrid[Hybrid Search: BM25 + PGVector]
     end
     
     subgraph "Persistence & Intelligence"
         Graph --> History[(AWS RDS History)]
-        Graph --> Web[Tavily Search]
+        Graph --> Judge[LLM-as-a-Judge / Chat Logs]
     end
 ```
 
@@ -74,94 +92,108 @@ main
        │                   ingest_all.py
        │                        │
        │                        ▼
-       └───────── [RDS PostgreSQL + Pinecone + S3]
+       └───────── [RDS PostgreSQL(pgvector) + S3]
        
 ```
 
 ### 폴더 및 파일 구조
 ```
 WELD-BOT v4.0 Project
-├── .env                  # 로컬 환경 변수 설정
-├── README.md             # 프로젝트 소개 문서
-├── PROJECT_STRUCTURE.md  # 현재 보고 계신 아키텍처 및 로직 명세서
-├── run_tunnel.py         # DB 접근을 위한 백그라운드 SSH 터널링 유지 스크립트
-├── run_all.py            # 백엔드(FastAPI)와 프론트엔드(Streamlit) 동시 실행 마스터 런처 (v3.1 적용)
-├── run_all.bat / .sh     # OS별 실행 쉘 스크립트
-├── kill_all.bat / .sh    # 프로세스 강제 종료용 쉘 스크립트
-├── marker.py             # 멀티 GPU 기반 PDF 분산 파싱 및 마크다운 변환 파이프라인 스크립트
-├── main.py               # 백엔드 통합 FastAPI 메인 서버 (RAG, Chat, Auth, Admin 라우터 포함 인증 연동판)
-├── v4_app.py             # 프론트엔드(Streamlit) 메인 애플리케이션 (v4.0 엔트리포인트)
-├── pyproject.toml / poetry.lock # 패키지 의존성 관리
-├── app/                  # 핵심 아키텍처 및 백엔드 로직 중심 폴더
-│   ├── main.py           # 단일 API 테스트용 분리된 FastAPI 엔트리포인트
-│   ├── app_logic.py      # LangGraph 기반 스트리밍 스트림 추출 처리 모듈
-│   ├── api/              # FastAPI API 라우터
-│   │   ├── auth_api.py   # JWT 기반 로그인, 회원가입, 소셜(OAuth) 로그인 로직 및 미들웨어
-│   │   └── routes/
-│   │       ├── chat.py   # 채팅 스트리밍 (SSE) 및 단건 응답 엔드포인트 라우터
-│   │       └── admin.py  # 관리자용 PDF 업로드 파일 파싱 파이프라인 API 라우터
-│   ├── agents/           # LangGraph 기반 워크플로우 및 AI Agent 모듈
-│   │   ├── graph.py      # LangGraph 노드 연결 및 상태 제어 (도메인 재분류/할루시네이션 검증 3중 안전 로직)
-│   │   ├── stream.py     # GraphState 기반 통합 비동기 발생기(Event Generator) 제어
-│   │   ├── supervisor.py # 의도 파악 및 도메인 분류(Technical/Social) 판단 에이전트
-│   │   ├── specialists/  # 분야별(로봇, 용접, 전기, 일반, 인사말) 전문 에이전트 모듈
-│   │   └── tools/        # 질의 재작성(Rewriter/Feedback) 등 유틸리티 에이전트
-│   ├── core/             # 공통 코어 모듈 (설정, 베이스 DB, 프롬프트, 보안)
-│   │   ├── config.py     # 환경 변수 검증 및 전역 Config 세팅(기기별 디바이스 체크)
-│   │   ├── database.py   # PostgeSQL 연결, SSH 터널링 관리, 유저/채팅 로깅 체계 공통 모듈
-│   │   ├── history.py    # LangGraph 대화 기록용 AsyncPostgresSaver 연동 및 저장
-│   │   ├── prompts.py / prompts_mj.py # 에이전트별 시스템 프롬프트 모음
-│   │   └── security.py   # 환각 감지(Hallucination Verification) 보안 노드 모델 검증
-│   ├── infrastructure/   # 외부 연동 인프라 연계 계층
-│   │   └── aws/          # Bedrock(LLM), OpenSearch, S3 연동 클라이언트 및 RDS(PgVector) 통신
-│   ├── ingest/           # 데이터 수집 및 전처리 파이프라인 (Chunking 문서 벡터화 등)
-│   ├── rag/              # RAG (검색 증강 생성) 핵심 파이프라인
-│   │   ├── pipeline.py   # Reranker와 Hybrid Retriever를 결합한 Advanced RAG 메인 함수
-│   │   ├── reranker.py   # Cross-Encoder (BGE-M3 등) 기반 문서 순위 재조정 처리
-│   │   └── retriever.py  # BM25 기반 키워드 + Vector DB 기반 융합 하이브리드 Retriever
-│   ├── schemas/          # Pydantic 스키마 및 LangGraph 상태 타입 지정 구조 (state.py)
-│   ├── services/         # 실질적인 비즈니스 로직 및 서비스 계층 (PDF 파싱, 데이터베이스 적재 체인)
-│   └── vectorstore/      # PgVector DB 연결 및 Vector Store 관리 로직 체인
-├── frontend/             # Streamlit 기반 프론트엔드 UI 컴포넌트 모음
-│   ├── auth_ui.py        # 로그인, 회원가입, 폼 라우팅 및 소셜 로그인 연동 화면, JWT 토큰 캐싱 관리
-│   ├── chat_ui.py        # 챗봇 뷰포트 구성, SSE Client 사용 실시간 스트리밍 애니메이션
-│   └── admin_ui.py       # 관리자 전용 대시보드 (Chat Logs, User 현황, PDF Marker 업로드) 통계 UI
-├── scripts/              # 일회성 유틸리티 스크립트 모음 (인덱스 재생성, DB 검사 등)
-├── tests/                # 프로젝트 통합, 단위 테스트 및 LLM 평가 모델 스크립트 모음
-├── data/                 # 참조 데이터 및 raw_pdf 보관 위치
-├── domain/               # 도메인별 RAG 기초 참조 가이드 문서들
-└── models/               # 서버 내부망 로컬 호스팅 모델 파일(BGE Reranker 등) 오프라인 경로
+├── .env                        # 로컬 환경 변수
+├── README.md                   # 프로젝트 문서
+├── pyproject.toml
+├── poetry.lock                 # Poetry 의존성 잠금 파일
+├── run_all.py                  # 통합 실행 엔트리 (Tunnel + Backend + Frontend)
+├── run_all.bat / run_all.sh    # OS별 실행 스크립트
+├── run_tunnel.py               # SSH 터널 백그라운드 프로세스
+├── main.py                     # FastAPI 백엔드 엔트리포인트
+├── v4_app.py                   # Streamlit 프론트엔드 엔트리포인트
+├── kill_all.bat / kill_all.sh  # 실행 프로세스 종료 스크립트
+├── check_db_indexes.py         # DB 인덱스 점검 유틸
+├── check_dims.py               # 벡터 차원 점검 유틸
+├── cleanup_s3.py / list_s3.py  # S3 정리/조회 유틸
+├── marker.py                   # 문서 파싱/마크다운 변환 스크립트
+├── app/                        # 백엔드 핵심 모듈
+│   ├── main.py
+│   ├── app_logic.py
+│   ├── api/                    # auth/chat/admin 라우터
+│   ├── agents/                 # LangGraph 워크플로우/전문가 에이전트
+│   ├── core/                   # 설정/보안/히스토리/프롬프트
+│   ├── infrastructure/aws/     # Bedrock/OpenSearch/S3/RDS 연동
+│   ├── ingest/                 # 적재/전처리 파이프라인
+│   ├── rag/                    # retriever/reranker/pipeline
+│   ├── schemas/                # 상태/스키마 정의
+│   ├── services/               # 서비스 계층
+│   └── vectorstore/            # pgvector 스토어 관리
+├── frontend/                   # Streamlit UI
+│   ├── main_page.py / main_page_logout.py
+│   ├── login.py / signup.py / auth_ui.py
+│   ├── chat.py / chat_ui.py
+│   ├── admin_ui.py / monitoring_ui.py
+│   └── image/
+│       ├── streamlit1.jpg
+│       └── image.png
+├── scripts/                    # 운영/유지보수 스크립트
+│   ├── check_rds_persistence.py
+│   ├── create_hnsw_index.py
+│   ├── ingest_all.py
+│   └── init_admin_settings.py
+├── data/                       # 런타임/캐시/처리 결과 데이터
+│   ├── runtime_model_config.json
+│   ├── cache/
+│   ├── processed/uploads_md/
+│   └── vector_cache/
+├── domain/                     # 도메인별 문서 루트
+│   ├── electrical/docs/
+│   ├── robotics/docs/
+│   └── welding/docs/
+├── models/                     # 로컬 모델 파일 (BGE reranker 등)
+├── infrastructure/aws/s3_utils.py
+└── logs/
 ```
 
 ## Data Flow
 ```
-사용자 질문
+사용자 질문 (Streamlit)
     │
     ▼
-① rewriter_node          # 은어 정규화 + 브랜드 추론 + gpt-4o-mini 쿼리 확장
+/chat (SSE) → stream_chat_response()
     │
+    ├─ thread_id 기준 대화 이력 로드 후 최근 3턴(6개 메시지) 유지
     ▼
-② supervisor_node        # gpt-4o 도메인 분류 (ROBOT / WELDING / ELECTRICAL / GENERAL)
+① rewriter_node
+    - 현장 은어(JARGON) 정규화 + 브랜드/에러코드 보강 + LLM 쿼리 확장
+    - routing_hint 생성: SOCIAL / GENERAL / TECHNICAL
     │
-    ├─ general → general_node ──────────────────────────────────── END
+    ├─ SOCIAL  → social_node (RAG 우회, 즉시 응답) → END
+    └─ 그 외    → supervisor_node
+                   │
+                   ▼
+② supervisor_node (robotics / welding / electrical / general 분류)
     │
-    └─ 기술 도메인
-           ▼
-③ specialist_node        # run_rag_pipeline → Hybrid Retriever → Reranker → gpt-4o 답변
+    ├─ general → general_node (RAG 우회) → END
+    └─ robotics|welding|electrical
            │
-           ▼ check_domain_mismatch()
-           ├─ Zero-hit (결과 0건)  ──── is_hallucinated=True 즉시 설정 (LLM 호출 없음)
-           ├─ 도메인 불일치         ──── supervisor_reroute (routing_retry ≤ 1회)
-           └─ 정상                 ──── verifier_node
-                                           │
-                                           ▼ check_hallucination()
-                                           ├─ 통과 ✅                → END
-                                           ├─ 실패 (retry < 2)      → feedback_rewriter
-                                           │                              ↓
-                                           │                    개선된 쿼리로 specialist 재실행
-                                           └─ 실패 (retry ≥ 2)     → fallback_node
-                                                                         ↓
-                                                              JSONL 로그 기록 → END
+           ▼
+③ specialist_node
+    - run_rag_pipeline
+      → Hybrid Retriever(PGVector + BM25)
+      → Cross-Encoder Reranker(Threshold 0.5, Top 4)
+      → 도메인 답변 생성
+           │
+           ▼
+④ Guard & Verify
+    - check_domain_mismatch: 불일치 시 supervisor_reroute (최대 1회), 초과 시 fallback
+    - verifier_node: 환각 검증
+      - 실패 & retry_count < 2  → feedback_rewriter → 같은 specialist 재실행
+      - 실패 & retry_count >= 2 → fallback
+      - 통과                     → END
+           │
+           ▼
+⑤ 응답/로그
+    - 최종 generated_answer만 SSE 청크로 전송
+    - AsyncPostgresSaver로 이력 저장
+    - LLM-as-a-Judge 비동기 평가 후 chat_logs 기록
 ```
 
 ### 제약 조건
@@ -170,8 +202,9 @@ WELD-BOT v4.0 Project
 |---|---|---|
 | `retry_count` | 최대 **2** | 3번째 실패 → fallback |
 | `routing_retry` | 최대 **1** | 도메인 재분류 1회 이후 → fallback |
-| 대화 이력 | **전체 유지** (AWS 연동) | 정확한 문맥 파악 및 토큰 최적화 병행 |
-| Zero-hit 처리 | Reranker 결과 < 30자 | LLM 호출 없이 바로 feedback_rewriter |
+| 대화 이력 | 실행 시 최근 **3턴(6개 메시지)** 유지 | 장기 대화 이력 폭증 방지 |
+| Zero-hit 처리 | Context 없음/짧음(<30자) | 재작성 루프 또는 verifier 경로로 복구 |
+| Retriever 가중치 | 기본 0.6/0.4 (Vector/BM25), 기술질의 시 BM25 0.7 | 에러코드/모델명 질의 정밀도 강화 |
 
 # 5.기능
 
@@ -182,7 +215,7 @@ WELD-BOT v4.0 Project
 검색 쿼리
     ↓
 Hybrid Retriever (EnsembleRetriever)
-    ├─ Chroma Vector Search   — 의미 기반 (가중치 0.6)
+    ├─ PGVector Search        — 의미 기반 (가중치 0.6)
     └─ BM25 Keyword Search    — 에러코드 정확 매칭 (가중치 0.4)
     ↓
 Cross-Encoder Reranker
@@ -207,7 +240,7 @@ Context 문자열 (출처 메타데이터 포함)
 
 ## 4. DataBase 
 ### &nbsp;&nbsp;✅PostgresSQL
-### &nbsp;&nbsp;✅Pinecone
+### &nbsp;&nbsp;✅pgvector
 ### &nbsp;&nbsp;✅S3
 
   
