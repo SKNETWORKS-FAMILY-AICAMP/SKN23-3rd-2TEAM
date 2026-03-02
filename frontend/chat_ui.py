@@ -63,16 +63,17 @@ def _ensure_chat_session_state():
     st.session_state.cookie_manager = cookie_manager
 
     if "thread_id" not in st.session_state:
-        saved_tid = cookie_manager.get(cookie="thread_id")
+        saved_tid = cookie_manager.get(cookie="thread_id") if cookie_manager else None
         if saved_tid:
             st.session_state.thread_id = saved_tid
         else:
             new_tid = f"weld_{int(time.time())}"
             st.session_state.thread_id = new_tid
-            try:
-                cookie_manager.set("thread_id", new_tid)
-            except Exception:
-                pass
+            if cookie_manager:
+                try:
+                    cookie_manager.set("thread_id", new_tid)
+                except Exception:
+                    pass
 
     if st.session_state.thread_id not in st.session_state.chat_threads:
         st.session_state.chat_threads[st.session_state.thread_id] = list(st.session_state.messages)
@@ -92,7 +93,11 @@ def _mark_current_thread_active():
 def _switch_thread(thread_id: str):
     _sync_current_thread_messages()
     st.session_state.thread_id = thread_id
-    cookie_manager.set("thread_id", thread_id)
+    if cookie_manager:
+        try:
+            cookie_manager.set("thread_id", thread_id)
+        except Exception:
+            pass
     st.session_state.messages = list(st.session_state.chat_threads.get(thread_id, []))
 
 
@@ -304,18 +309,7 @@ def inject_styles():
 
 /* ══════════════════════════════════════════════════
    하단 고정 레이아웃
-
-   [ 버튼바  - position fixed, bottom = input-h ]
-   [ 입력창  - stBottom, position fixed, bottom = 0 ]
-
-   Streamlit st.columns+st.button 은 stBottom에 안 들어가므로
-   CSS로 직접 fixed 고정 처리.
-   실제 Streamlit 버튼은 투명(opacity:0) + 그 위에 겹쳐서 클릭 가능하게.
 ══════════════════════════════════════════════════ */
-
-/* ══════════════════════════════════════
-   입력창 (stBottomBlockContainer) - 화면 최하단 고정
-══════════════════════════════════════ */
 [data-testid="stBottomBlockContainer"] {
   position: fixed !important;
   bottom: 0 !important;
@@ -329,24 +323,17 @@ def inject_styles():
   display: flex !important;
   align-items: center !important;
 }
-
-/* 입력창 내부는 max-width 900px 유지 */
 [data-testid="stBottomBlockContainer"] > div {
   max-width: 900px !important;
   margin: 0 auto !important;
   padding: 0 24px !important;
 }
-
-/* stBottom 기본 스타일 리셋 */
 [data-testid="stBottom"] {
   all: unset !important;
   display: block !important;
 }
 [data-testid="stBottom"] > div { padding: 0 !important; }
 
-/* ══════════════════════════════════════
-   버튼행 (stHorizontalBlock) - 입력창 바로 위 고정
-══════════════════════════════════════ */
 [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] {
   position: fixed !important;
   bottom: 96px !important;
@@ -362,15 +349,11 @@ def inject_styles():
   gap: 12px !important;
   margin: 0 !important;
 }
-
-/* 버튼 컬럼 wrapper */
 [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] [data-testid="stColumn"] {
   flex: 1 !important;
   min-width: 0 !important;
   padding: 0 !important;
 }
-
-/* 버튼 스타일 - 검은 배경 + 흰 글자 */
 [data-testid="stMainBlockContainer"] [data-testid="stHorizontalBlock"] button {
   width: 100% !important;
   height: 44px !important;
@@ -419,39 +402,63 @@ def inject_styles():
 .chat-bubble {
   background: #fff; 
   border-radius: 20px; 
-  padding: 10px 16px; /* 안쪽 여백을 조금 줄여서 타이트하게 만듦 */
+  padding: 10px 16px; 
   border: 1px solid rgba(0,0,0,0.08); 
   box-shadow: 0 4px 16px rgba(0,0,0,0.05);
   color: #0b1116; 
   position: relative;
-  width: fit-content; /* 글자 길이에 딱 맞춰서 말풍선 너비가 줄어들게 함 */
+  width: fit-content; 
   word-break: break-word;
-}
-
-/* 마크다운 변환 시 자동으로 생기는 불필요한 위아래 공백 제거 */
-.chat-text p {
-  margin: 0 !important;
-  line-height: 1.6;
 }
 .user-row .chat-bubble { border-top-right-radius: 4px; }
 .assistant-row .chat-bubble { border-top-left-radius: 4px; }
-/* ── 마크다운 표(Table) 스타일 ── */
+
+/* ── 마크다운 텍스트 및 헤더(제목) 크기 조정 ── */
+.chat-text {
+  font-size: 0.9rem; /* 전체 본문 글자 크기를 살짝 줄임 */
+  line-height: 1.6;
+}
+.chat-text p {
+  margin: 0 0 8px 0 !important; /* 문단 간격 조정 */
+}
+.chat-text p:last-child {
+  margin-bottom: 0 !important; /* 마지막 문단은 여백 제거 */
+}
+/* 제목(##, ### 등)이 너무 커지지 않도록 강제 고정 */
+.chat-text h1 { font-size: 1.15rem; margin: 12px 0 6px; font-weight: 700; color: #111; }
+.chat-text h2 { font-size: 1.05rem; margin: 12px 0 6px; font-weight: 700; color: #111; }
+.chat-text h3 { font-size: 0.95rem; margin: 10px 0 6px; font-weight: 700; color: #111; }
+.chat-text h4, .chat-text h5, .chat-text h6 { font-size: 0.9rem; margin: 8px 0 4px; font-weight: 700; }
+
+/* ── 리스트(목록) 스타일 조정 ── */
+.chat-text ul, .chat-text ol {
+  margin: 4px 0 10px 20px;
+  padding: 0;
+}
+.chat-text li {
+  margin-bottom: 4px;
+}
+
+/* ── 마크다운 표(Table) 컴팩트 스타일 ── */
 .chat-bubble table {
   border-collapse: collapse;
   width: 100%;
-  margin-top: 10px;
-  margin-bottom: 10px;
-  font-size: 0.9rem;
+  margin-top: 8px;
+  margin-bottom: 12px;
+  font-size: 0.85rem; /* 표 안의 글자 크기를 더 작게 */
 }
 .chat-bubble th, .chat-bubble td {
   border: 1px solid #d1d5db;
-  padding: 8px 12px;
+  padding: 6px 10px; /* 표 셀 안쪽 여백 축소 */
   text-align: left;
+  line-height: 1.4;
 }
 .chat-bubble th {
   background-color: #f3f4f6;
   font-weight: 700;
+  color: #333;
 }
+
 .chat-profile-img {
   width: 26px;
   height: 26px;
@@ -661,7 +668,11 @@ def render_chat():
             st.session_state.chat_threads[new_tid] = []
             st.session_state.thread_last_active[new_tid] = time.time()
             st.session_state.messages = []
-            cookie_manager.set("thread_id", new_tid)
+            if cookie_manager:
+                try:
+                    cookie_manager.set("thread_id", new_tid)
+                except Exception:
+                    pass
             st.rerun()
     with col2:
         if st.button(

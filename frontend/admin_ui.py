@@ -85,9 +85,10 @@ def show_admin_page():
 
         [data-testid="stMainBlockContainer"] { padding-top: 0 !important; margin-top: 0 !important; }
 
+        /* ── 전체 컨테이너 여백 추가 ── */
         .block-container {
-            max-width: 100%;
-            padding: 0 0 3rem 0;
+            max-width: 100% !important;
+            padding: 0 80px 3rem 80px !important; /* 양끝 80px 여백으로 넉넉하게 확대 */
         }
 
         /* ── 네비게이션 바 ── */
@@ -97,7 +98,7 @@ def show_admin_page():
             height: var(--nav-h);
             position: fixed;
             top: 0; left: 0; right: 0;
-            padding: 0 32px 0 24px;
+            padding: 0 80px; /* 본문 여백과 동일하게 맞춤 */
             background: #000;
             border-bottom: 1px solid var(--line);
             z-index: 9998;
@@ -198,7 +199,7 @@ def show_admin_page():
 
         /* ── 페이지 타이틀 ── */
         .page-header {
-            padding: 0 40px 20px 40px;
+            padding: 0 0 20px 0; /* 컨테이너에 여백을 주었으므로 개별 여백 제거 */
         }
 
         .page-title {
@@ -218,7 +219,7 @@ def show_admin_page():
         /* ── 탭 ── */
         .stTabs [data-baseweb="tab-list"] {
             background: transparent !important;
-            padding: 0 40px !important;
+            padding: 0 !important; /* 컨테이너 여백과 정렬을 맞추기 위해 제거 */
             border-bottom: 1.5px solid rgba(0,0,0,0.10) !important;
             gap: 0 !important;
         }
@@ -242,7 +243,7 @@ def show_admin_page():
         }
 
         .stTabs [data-baseweb="tab-panel"] {
-            padding: 32px 40px !important;
+            padding: 32px 0 !important; /* 컨테이너 여백과 정렬을 맞추기 위해 좌우여백 제거 */
             background: transparent !important;
         }
 
@@ -847,9 +848,3 @@ def show_admin_page():
                     st.error(res.text)
             elif activate_btn:
                 st.warning("활성화할 파일을 먼저 선택해 주세요.")
-
-    # ── Logout 처리: 로그아웃 로직은 URL 파라미터 기반으로 이미 v4_app에서 작동하게 조치 완료.
-    # 만약 사이드바 외부의 숨겨진 버튼이 필요하다면 아래 코드를 활성화하세요.
-    # with st.container():
-    #     if st.button("Logout", key="footer_logout"):
-    #         _admin_logout()
