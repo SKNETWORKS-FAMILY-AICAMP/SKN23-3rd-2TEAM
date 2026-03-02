@@ -7,6 +7,7 @@
 #   from app.rag.pipeline import run_rag_pipeline         -- RAG 문서 검색
 #   from app.core.security import verify_hallucination    -- 환각 검증 (선택 사용)
 # ============================================================
+import asyncio
 from app.rag.pipeline import run_rag_pipeline
 from app.core.security import verify_hallucination
 from langchain_core.prompts import ChatPromptTemplate
@@ -86,7 +87,7 @@ async def robotics_node(state: GraphState) -> dict:
         filters = {"model_name": "Hi5"}
 
     # RAG 검색
-    context, max_score = run_rag_pipeline(search_query, domain="ROBOT", filters=filters)
+    context, max_score = await asyncio.to_thread(run_rag_pipeline, search_query, domain="ROBOT", filters=filters)
 
     # ① 제로히트(Zero-hit) 조기 종료
     # Reranker 엄갑 통과 문서가 0개이면 LLM 호출 없이 즉시 피드백 루프 진입

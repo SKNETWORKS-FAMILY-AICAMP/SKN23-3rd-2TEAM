@@ -1,18 +1,24 @@
 import re
 
-import requests
+import extra_streamlit_components as stx
 import streamlit as st
-
-from frontend.auth_ui import (
-    _clear_access_token_cookie,
-    _normalize_token,
-    _save_access_token_cookie,
-)
-
-API_URL = "http://localhost:8000"
+from streamlit_cookies_controller import CookieController
 
 
-def validate_id(user_id: str) -> str | None:
+def _normalize_token(raw_token) -> str | None:
+    if raw_token is None:
+        return None
+    token = str(raw_token).strip()
+    if not token:
+        return None
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        token = token[1:-1].strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token or None
+
+
+def validate_id(user_id):
     if not user_id.strip():
         return "아이디를 입력해주세요."
     if len(user_id) < 4:
@@ -20,91 +26,91 @@ def validate_id(user_id: str) -> str | None:
     if len(user_id) > 12:
         return "아이디는 12자 이하로 입력해주세요."
     if re.search(r"[^a-zA-Z0-9]", user_id):
-        return "아이디는 영문과 숫자만 사용 가능합니다."
+        return "아이디는 영문과 숫자만 사용 가능합니다. (특수문자 불가)"
     return None
 
 
-def validate_password(password: str) -> str | None:
-    if not password.strip():
-        return "비밀번호를 입력해주세요."
-    if len(password) < 8:
-        return "비밀번호는 8자 이상 입력해주세요."
-    if len(password) > 20:
-        return "비밀번호는 20자 이하로 입력해주세요."
-    if re.search(r"[^a-zA-Z0-9]", password):
-        return "비밀번호는 영문과 숫자만 사용 가능합니다."
-    if not re.search(r"[A-Z]", password):
-        return "비밀번호에 대문자를 1자 이상 포함해주세요."
-    if not re.search(r"[0-9]", password):
-        return "비밀번호에 숫자를 1자 이상 포함해주세요."
+def validate_password(pw):
+    # 비밀번호 정책 제한 없음
     return None
 
 
-def show_login_page() -> None:
-    if "access_token" not in st.session_state:
-        st.session_state.access_token = None
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    api = st.session_state.get("api_session")
-    if api is None:
-        api = requests.Session()
-        st.session_state.api_session = api
-
-    # Keep auth flow aligned with auth_ui: validate cached token before showing form.
-    cached_token = _normalize_token(st.session_state.get("access_token"))
-    st.session_state.access_token = cached_token
-    if cached_token and not st.session_state.get("authenticated"):
-        try:
-            me_resp = api.get(
-                f"{API_URL}/auth/me",
-                headers={"Authorization": f"Bearer {cached_token}"},
-                timeout=5,
-            )
-            if me_resp.status_code == 200:
-                st.session_state.user = me_resp.json()
-                st.session_state.authenticated = True
-                st.session_state.cookie_restore_attempted = False
-                st.markdown("<meta http-equiv='refresh' content='0; url=/'>", unsafe_allow_html=True)
-                st.stop()
-            if me_resp.status_code in (401, 403):
-                st.session_state.access_token = None
-                _clear_access_token_cookie()
-        except Exception:
-            # Keep token on transient backend/network failures.
-            pass
-
-    if st.session_state.get("authenticated") and st.session_state.get("access_token"):
-        st.markdown("<meta http-equiv='refresh' content='0; url=/'>", unsafe_allow_html=True)
-        st.stop()
-
+def show_login_page(api, api_url, on_back, on_signup):
     st.markdown(
         """
         <style>
+        :root {
+            --nav-h: 64px;
+            --line: rgba(120, 190, 220, 0.20);
+            --primary: #ff6a3d;
+            --secondary: #2ec5ff;
+        }
+
+        html, body { margin: 0 !important; padding: 0 !important; }
         [data-testid="stHeader"], [data-testid="stToolbar"] { display: none !important; }
         .stApp { background-color: #f2f2f2; }
-        .block-container { max-width: 100% !important; padding: 0 !important; }
-        .nav {
-            display: flex; align-items: center; height: 64px; position: fixed;
-            top: 0; left: 0; right: 0; padding: 0 24px; background: #000; z-index: 9998;
+
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] {
+            padding-top: 0 !important; margin-top: 0 !important;
         }
-        .logo-btn { display: flex; align-items: center; gap: 10px; text-decoration: none !important; }
+
+        .block-container { max-width: 100% !important; padding: 0 !important; }
+
+        .nav {
+            display: flex; align-items: center;
+            height: var(--nav-h); position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 0 32px 0 24px;
+            background: #000; border-bottom: 1px solid var(--line); z-index: 9998;
+        }
+
+        .logo-btn {
+            display: flex; align-items: center; gap: 10px;
+            text-decoration: none !important; cursor: pointer;
+        }
+        .logo-btn:hover .logo-name { color: #2ec5ff; }
+
         .logo-dot {
             width: 14px; height: 14px; border-radius: 50%;
-            background: linear-gradient(135deg, #2ec5ff, #ff6a3d);
-            box-shadow: 0 0 20px rgba(46,197,255,0.8);
+            background: linear-gradient(135deg, var(--secondary), var(--primary));
+            box-shadow: 0 0 20px rgba(46,197,255,0.8); flex-shrink: 0;
         }
-        .logo-name { font-size: 0.95rem; font-weight: 600; color: #dbf5ff; letter-spacing: 0.08em; }
+
+        .logo-name {
+            font-size: 0.95rem; font-weight: 600; color: #dbf5ff;
+            letter-spacing: 0.08em; transition: color 0.15s;
+        }
+
         .stForm {
-            background-color: #fff; border-radius: 8px;
+            background-color: #fff; border-radius: 0.5rem;
             box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
             padding: 2rem 1.5rem !important; border: none !important;
         }
+
+        .stTextInput label {
+            font-size: 14px !important; font-weight: 600 !important; color: #111 !important;
+        }
+        .stTextInput input {
+            border: 1.5px solid #d1d5db !important; border-radius: 8px !important;
+            font-size: 15px !important; background: #f2f2f2 !important; color: #111 !important;
+        }
+        .stTextInput input:focus {
+            box-shadow: 0 0 0 2px rgba(0,0,0,0.08) !important; border-color: black !important;
+        }
+
         [data-testid="stFormSubmitButton"] > button {
-            background: #000 !important; color: #fff !important; border: 1px solid #000 !important;
-            width: 100% !important; border-radius: 6px !important; height: 44px !important;
+            background: #000 !important; color: #fff !important;
+            border: 1px solid #000 !important; width: 100% !important;
+            border-radius: 6px !important; height: 44px !important;
             font-size: 15px !important; font-weight: 600 !important;
         }
+        [data-testid="stFormSubmitButton"] > button:hover {
+            background: #111 !important; color: #fff !important;
+        }
+
+        h1 { text-align: center; margin-bottom: 2rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -113,7 +119,7 @@ def show_login_page() -> None:
     st.markdown(
         """
         <div class="nav">
-            <a class="logo-btn" href="/" target="_self">
+            <a class="logo-btn" href="/?route=main" target="_self">
                 <div class="logo-dot"></div>
                 <div class="logo-name">WELDPILOT AI</div>
             </a>
@@ -123,65 +129,117 @@ def show_login_page() -> None:
     )
 
     st.markdown("<div style='height: calc(64px + 10vh);'></div>", unsafe_allow_html=True)
+
     _, card, _ = st.columns([2.5, 3, 2.5])
 
     with card:
         with st.form("login_form", clear_on_submit=False):
-            st.markdown("<h1 style='text-align:center; margin-bottom:2rem;'>로그인</h1>", unsafe_allow_html=True)
+            st.markdown(
+                "<h1 style='text-align:center; margin-bottom:2rem; transform: translateX(20px);'>로그인</h1>",
+                unsafe_allow_html=True,
+            )
             user_id = st.text_input("아이디", placeholder="영문+숫자, 4~12자")
-            password = st.text_input("비밀번호", placeholder="영문 대소문자+숫자, 8~20자", type="password")
+            password = st.text_input("비밀번호", placeholder="비밀번호", type="password")
+
             st.markdown("<div style='margin-top: 1.25rem;'></div>", unsafe_allow_html=True)
-            left, right = st.columns(2)
-            with left:
+
+            btn1, btn2 = st.columns(2)
+            with btn1:
                 login_clicked = st.form_submit_button("로그인", use_container_width=True)
-            with right:
+            with btn2:
                 signup_clicked = st.form_submit_button("회원가입", use_container_width=True)
 
-        if signup_clicked:
-            st.markdown("<meta http-equiv='refresh' content='0; url=/?auth=signup'>", unsafe_allow_html=True)
-            st.stop()
+            st.markdown(
+                """
+                <div style='text-align:center; margin-top:1rem;'>
+                    <a href='#' style='font-size:0.75rem; color:#6b7280; text-decoration:underline;'>비밀번호 찾기</a>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         if login_clicked:
             id_err = validate_id(user_id)
             pw_err = validate_password(password)
+
             if id_err:
-                st.error(id_err)
-                return
-            if pw_err:
-                st.error(pw_err)
-                return
-
-            try:
-                response = api.post(
-                    f"{API_URL}/auth/login",
-                    data={"username": user_id, "password": password},
-                    timeout=10,
-                )
-            except Exception as exc:
-                st.error(f"백엔드 연결 실패: {exc}")
-                return
-
-            if response.status_code != 200:
+                st.error(f"⚠ {id_err}")
+            elif pw_err:
+                st.error(f"⚠ {pw_err}")
+            else:
                 try:
-                    detail = response.json().get("detail")
-                except Exception:
-                    detail = None
-                st.error(detail or "아이디 또는 비밀번호가 올바르지 않습니다.")
-                return
+                    response = api.post(
+                        f"{api_url}/auth/login",
+                        data={"username": user_id, "password": password},
+                        timeout=10,
+                    )
+                except Exception as exc:
+                    st.error(f"백엔드 연결 실패: {exc}")
+                    return
 
-            data = response.json()
-            token = _normalize_token(data.get("weld_auth_token") or data.get("access_token"))
-            if not token:
-                st.error("로그인 응답에 토큰이 없습니다.")
-                return
+                if response.status_code != 200:
+                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+                else:
+                    data = response.json()
+                    token = _normalize_token(data.get("weld_auth_token"))
+                    if not token:
+                        st.error("로그인 응답에 토큰이 없습니다.")
+                        return
 
-            st.session_state.user = data.get("user")
-            st.session_state.access_token = token
-            st.session_state.authenticated = True
-            st.session_state.force_logged_out = False
-            st.session_state.cookie_restore_attempted = False
-            _save_access_token_cookie(token)
-            st.rerun()
+                    st.session_state.user = data.get("user")
+                    st.session_state.user_name = st.session_state.user.get("name") or st.session_state.user.get("username") or "Unknown"
+                    st.session_state.access_token = token
+                    st.session_state.authenticated = True
+                    st.session_state.force_logged_out = False
+                    st.session_state.cookie_restore_attempted = False
+                    st.session_state.cookie_restore_attempt_count = 0
 
+                    controller = st.session_state.get("cookie_controller")
+                    if controller is None:
+                        try:
+                            controller = CookieController(key="weld_cookies_new")
+                            st.session_state.cookie_controller = controller
+                        except Exception:
+                            controller = None
+                    if controller:
+                        try:
+                            controller.set(
+                                "weld_access_token",
+                                token,
+                                path="/",
+                                max_age=60 * 60 * 24 * 7,
+                                same_site="lax",
+                            )
+                        except Exception:
+                            pass
+                    backup_manager = st.session_state.get("cookie_manager_auth")
+                    if backup_manager is None:
+                        try:
+                            backup_manager = stx.CookieManager(key="weld_cookie_manager_auth")
+                            st.session_state.cookie_manager_auth = backup_manager
+                        except Exception:
+                            backup_manager = None
+                    if backup_manager:
+                        try:
+                            backup_manager.set(
+                                cookie="weld_access_token",
+                                val=token,
+                                path="/",
+                                max_age=60 * 60 * 24 * 7,
+                                same_site="lax",
+                            )
+                        except Exception:
+                            pass
 
-show_login_page()
+                    st.success(f"✅ 로그인 성공: {user_id}")
+                    
+                    # Clean up URL and set home route
+                    st.query_params.pop("public", None)
+                    st.query_params["route"] = "home"
+                    
+                    import time
+                    time.sleep(0.5)
+                    st.rerun()
+
+        if signup_clicked:
+            on_signup()

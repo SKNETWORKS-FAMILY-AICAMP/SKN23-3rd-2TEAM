@@ -39,17 +39,20 @@ def _save_access_token_cookie(token: str) -> None:
 
 def _clear_access_token_cookie() -> None:
     controller = st.session_state.get("cookie_controller")
-    if not controller:
-        return
-    try:
-        controller.remove("weld_access_token", path="/", same_site="lax")
-    except Exception:
-        pass
-    try:
-        # Cleanup for legacy cookie name if it exists in browser storage.
-        controller.remove("weld_auth_token", path="/", same_site="lax")
-    except Exception:
-        pass
+    if controller:
+        try:
+            # Force expiration using both remove and set(max_age=0)
+            controller.remove("weld_access_token", path="/", same_site="lax")
+            controller.set("weld_access_token", "", max_age=0, path="/")
+        except Exception:
+            pass
+
+    backup_manager = st.session_state.get("cookie_manager_auth")
+    if backup_manager:
+        try:
+            backup_manager.delete("weld_access_token")
+        except Exception:
+            pass
 
 
 def show_auth_page(api, API_URL):
@@ -101,6 +104,7 @@ def show_auth_page(api, API_URL):
                 if st.session_state.access_token:
                     _save_access_token_cookie(st.session_state.access_token)
                     st.session_state.cookie_restore_attempted = False
+                    st.session_state.cookie_restore_attempt_count = 0
                 st.query_params.clear()
                 return
             else:
@@ -142,6 +146,7 @@ def show_auth_page(api, API_URL):
             st.session_state.force_logged_out = False
             _save_access_token_cookie(st.session_state.access_token)
             st.session_state.cookie_restore_attempted = False
+            st.session_state.cookie_restore_attempt_count = 0
             st.success(f"{login_id}님 환영합니다.")
             import time
             time.sleep(0.5)
@@ -202,9 +207,15 @@ def logout(api, API_URL):
     st.session_state.access_token = None
     st.session_state.force_logged_out = True
     st.session_state.cookie_restore_attempted = False
-    st.session_state.logged_in = False
+    st.session_state.cookie_restore_attempt_count = 0
     _clear_access_token_cookie()
 
     st.session_state.api_session = requests.Session()
+    
+    # Deterministic redirect: clear all and set public to main
     st.query_params.clear()
+    st.query_params["public"] = "main"
+    
+    import time
+    time.sleep(0.5)
     st.rerun()
