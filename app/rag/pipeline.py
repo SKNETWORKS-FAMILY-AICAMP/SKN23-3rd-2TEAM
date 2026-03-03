@@ -8,8 +8,30 @@
 #   langchain-openai      -- OpenAIEmbeddings
 #   sentence-transformers -- CrossEncoderReranker 백엔드
 # ============================================================
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.documents import Document
+import tiktoken
+
+def truncate_context_by_tokens(context_list: list[str], max_tokens: int = 6000, model_name: str = "gpt-4o") -> str:
+    """검색된 청크 리스트를 토큰 제한에 맞게 안전하게 병합 및 절사합니다."""
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base") # Fallback
+        
+    final_context = ""
+    current_tokens = 0
+    
+    for chunk_text in context_list:
+        chunk_tokens = len(encoding.encode(chunk_text))
+        if current_tokens + chunk_tokens > max_tokens:
+            print(f"⚠️ Token limit reached ({current_tokens}/{max_tokens}). Truncating remaining context.")
+            break
+            
+        final_context += chunk_text
+        current_tokens += chunk_tokens
+        
+    return final_context.strip()
 
 from app.rag.retriever import get_hybrid_retriever as build_hybrid_retriever
 from app.rag.reranker import rerank_documents
@@ -72,7 +94,7 @@ def run_advanced_rag(
             → Context 문자열 결합
 
     Returns:
-        str: 압축된 관련 문서 텍스트 (LLM에게 전달할 Context)
+        tuple[str, float]: (압축된 관련 문서 텍스트, 최고 리랭커 점수)
     """
     print(f"[Advanced RAG] 쿼리: '{query}' | 도메인: {domain}")
 
@@ -97,8 +119,8 @@ def run_advanced_rag(
         retrieved_docs = filtered if filtered else retrieved_docs
         print(f"[Advanced RAG] 도메인 필터({domain}) 후: {len(retrieved_docs)}개")
 
-    # 3. Cross-Encoder 리랭킹 — [FIX] rerank_documents는 (docs, is_found) 튜플 반환
-    top_docs, is_found = rerank_documents(
+    # 3. Cross-Encoder 리랭킹
+    top_docs, is_found, max_score = rerank_documents(
         query=query,
         documents=retrieved_docs,
         top_n=rerank_top_n,
@@ -106,16 +128,17 @@ def run_advanced_rag(
 
     # 4. 최종 Context 결합
     if not is_found or not top_docs:
-        return "(관련 매뉴얼 문서를 찾을 수 없습니다.)"
+        return "(관련 매뉴얼 문서를 찾을 수 없습니다.)", max_score
 
-    context = "\n\n---\n\n".join([
-        f"[출처: {doc.metadata.get('source','?')} | {doc.metadata.get('chapter_path','?')}]\n{doc.page_content}"
+    context_pieces = [
+        f"[출처: {doc.metadata.get('source','?')} | {doc.metadata.get('chapter_path','?')}]\n{doc.page_content}\n\n---\n\n"
         for doc in top_docs
-    ])
+    ]
+    context = truncate_context_by_tokens(context_pieces, max_tokens=6000)
     # 메타데이터를 Context 머리말에 삽입 → LLM이 [출처:...] 태그를 답변에 그대로 사용 가능
 
     print(f"[Advanced RAG] 최종 Context 길이: {len(context)}자 ({len(top_docs)}개 청크)")
-    return context
+    return context, max_score
 
 # ── 레거시 단순 RAG 파이프라인 (기존 Specialist 호환용) ──
 class PGVectorRetriever:
@@ -134,10 +157,11 @@ class PGVectorRetriever:
             "[HD Hi6 Robot | 케이블 점검]\n유지보수 가이드: 링 케이블과 커넥터의 파손 및 마모를 주기적으로 점검하십시오.",
         ]
 
-def run_rag_pipeline(query: str, domain: str, filters: Dict[str, Any] = None) -> str:
+def run_rag_pipeline(query: str, domain: str, filters: Dict[str, Any] = None) -> Tuple[str, float]:
     """
     실제 Advanced RAG 파이프라인(Hybrid + Rerank)을 실행합니다.
     기존 Specialist 노드들과의 호환성을 위해 유지하며, 내부적으로 run_advanced_rag를 호출합니다.
+    (문서 내용, 리랭커 점수) 튜플 반환.
     """
     # 94k 데이터를 RDS에서 매번 가져와 BM25를 만드는 것은 비효율적이므로, 
     # build_hybrid_retriever(get_hybrid_retriever) 내부의 캐싱 로직을 활용합니다.
@@ -170,19 +194,19 @@ def run_rag_pipeline(query: str, domain: str, filters: Dict[str, Any] = None) ->
         retrieved_docs = filtered if filtered else retrieved_docs
 
     # 4. Reranking
-    top_docs, is_found = rerank_documents(
+    top_docs, is_found, max_score = rerank_documents(
         query=query,
         documents=retrieved_docs,
         top_n=4
     )
     
     if not is_found or not top_docs:
-        return "(관련 매뉴얼 없음)"
+        return "(관련 매뉴얼 없음)", max_score
 
-    # 5. Context 생성
-    context = "\n\n---\n\n".join([
-        f"[출처: {doc.metadata.get('source_file','?')} | {doc.metadata.get('Header 1','?')}]\n{doc.page_content}"
+    context_pieces = [
+        f"[출처: {doc.metadata.get('source_file','?')} | {doc.metadata.get('Header 1','?')}]\n{doc.page_content}\n\n---\n\n"
         for doc in top_docs
-    ])
+    ]
+    context = truncate_context_by_tokens(context_pieces, max_tokens=6000)
     
-    return context
+    return context, max_score

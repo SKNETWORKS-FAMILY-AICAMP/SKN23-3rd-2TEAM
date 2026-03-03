@@ -1,62 +1,99 @@
 import os
+import sys
+import asyncio
 import contextlib
-from langgraph.checkpoint.memory import MemorySaver
+
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 
-def _get_connection_string():
-    """
-    환경 변수와 SSH 터널링 상태를 기반으로 DB 연결 문자열을 생성합니다.
-    """
-    pg_user = os.getenv("PGUSER")
-    pg_password = os.getenv("PGPASSWORD")
-    pg_db = os.getenv("PGDATABASE")
-    
-    # SSH 터널링 활성화 여부 확인
-    ssh_enabled = os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true"
-    ssh_local_port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
-    
-    if ssh_enabled:
-        target_host = "127.0.0.1"
-        target_port = ssh_local_port
-    else:
-        target_host = os.getenv("PGHOST")
-        target_port = os.getenv("PGPORT", "5432")
-        
-    return f"postgresql://{pg_user}:{pg_password}@{target_host}:{target_port}/{pg_db}?sslmode=require"
+
+# Windows + psycopg async compatibility:
+# Force SelectorEventLoop policy early so libraries imported later inherit it when possible.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+class AsyncCompatPostgresSaver(PostgresSaver):
+    """Thread-offloaded async wrappers for PostgresSaver on Windows."""
+
+    async def aget_tuple(self, config):
+        return await asyncio.to_thread(self.get_tuple, config)
+
+    async def aget(self, config):
+        return await asyncio.to_thread(self.get, config)
+
+    async def aput(self, config, checkpoint, metadata, new_versions):
+        return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(self, config, writes, task_id, task_path=""):
+        return await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
+
+    async def adelete_thread(self, thread_id):
+        return await asyncio.to_thread(self.delete_thread, thread_id)
+
+    async def alist(self, config, *, filter=None, before=None, limit=None):
+        items = await asyncio.to_thread(
+            lambda: list(self.list(config, filter=filter, before=before, limit=limit))
+        )
+        for item in items:
+            yield item
+
+
+def _get_conn_info():
+    """Build PostgreSQL conninfo from env vars."""
+    host = os.getenv("PGHOST", "localhost")
+    user = os.getenv("PGUSER", "postgres")
+    pw = os.getenv("PGPASSWORD", "password")
+    db = os.getenv("PGDATABASE", "chatbot_db")
+    port = os.getenv("PGPORT", "5432")
+
+    # Route through local SSH tunnel when enabled.
+    if os.getenv("SSH_TUNNEL_ENABLED", "false").lower() == "true":
+        host = "127.0.0.1"
+        port = os.getenv("SSH_LOCAL_BIND_PORT", "15432")
+
+    keepalives = "keepalives=1 keepalives_idle=60 keepalives_interval=10 keepalives_count=5 connect_timeout=5"
+    return f"host={host} user={user} password={pw} dbname={db} port={port} {keepalives}"
+
 
 def get_memory_saver():
-    """로컬 테스트용 인메모리 세이버 (기존 호환성 유지)"""
-    return MemorySaver()
+    """
+    Historical name kept for compatibility.
+    Returns a Postgres-backed saver with a sync connection pool.
+    """
+    conninfo = _get_conn_info()
+    pool = ConnectionPool(conninfo, max_size=10, min_size=1, max_lifetime=300)
+    checkpointer = PostgresSaver(pool)
+    checkpointer.setup()
+    return checkpointer
+
 
 @contextlib.asynccontextmanager
 async def get_async_postgres_saver():
     """
-    AWS RDS(Postgres)를 기반으로 하는 비동기 영속성 체크포인터를 반환합니다.
+    Async context manager for LangGraph checkpointer.
+
+    On Windows, psycopg async pool may fail under ProactorEventLoop.
+    We use sync ConnectionPool + PostgresSaver (which still exposes async methods)
+    to avoid that runtime incompatibility.
     """
+    conninfo = _get_conn_info()
+
+    if sys.platform == "win32":
+        pool = ConnectionPool(conninfo, max_size=10, min_size=1, max_lifetime=300)
+        try:
+            checkpointer = AsyncCompatPostgresSaver(pool)
+            await asyncio.to_thread(checkpointer.setup)
+            yield checkpointer
+        finally:
+            pool.close()
+        return
+
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool
-    import psycopg
 
-    conn_info = _get_connection_string()
-    
-    # 1. 초기 테이블 셋업 (트랜잭션 블록 외부에서 실행)
-    try:
-        async with await psycopg.AsyncConnection.connect(conn_info, autocommit=True) as conn:
-            saver = AsyncPostgresSaver(conn)
-            await saver.setup()
-    except Exception as e:
-        print(f"⚠️ AsyncPostgresSaver setup 경고: {e}")
-
-    # 2. AsyncConnectionPool을 사용하여 안정적인 연결 관리
-    # min_size=1로 최소 연결 유지, timeout 상향 조정으로 SSH 터널링 지연 대응
-    async with AsyncConnectionPool(
-        conn_info, 
-        max_size=10, 
-        min_size=1, 
-        timeout=30.0,
-        kwargs={"connect_timeout": 10}
-    ) as pool:
+    async with AsyncConnectionPool(conninfo, max_size=10, max_lifetime=300) as pool:
         async with pool.connection() as conn:
-            saver = AsyncPostgresSaver(conn)
-            yield saver
+            checkpointer = AsyncPostgresSaver(conn)
+            await checkpointer.setup()
+            yield checkpointer

@@ -17,6 +17,8 @@ class GraphState(TypedDict):
     context: str               # RAG 검색 결과 (문서 청크 텍스트)
     generated_answer: str      # Specialist가 생성한 답변
     is_hallucinated: bool      # 환각 여부 (True=실패)
+    reranker_score: float      # 검색 점수 최고값 모니터링
+    verifier_passed: bool      # 환각 검증 통과 여부 모니터링
     retry_count: int           # Verifier 재시도 횟수 (최대 2 → fallback)
     verifier_feedback: str     # Verifier 실패 분석 → feedback_rewriter에 전달
     domain_mismatch: bool      # specialist가 도메인 불일치 감지 시 True

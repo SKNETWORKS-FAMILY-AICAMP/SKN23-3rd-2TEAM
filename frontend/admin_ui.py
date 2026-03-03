@@ -1,115 +1,850 @@
-"""
-backend/sse_timing_guide.py
-────────────────────────────────────────────────────────────────
-백엔드에서 프론트엔드로 전송해야 하는 SSE 이벤트 포맷 가이드.
-main.py 의 /chat 엔드포인트에 통합하세요.
+def show_admin_page():
+    import streamlit as st
+    import pandas as pd
+    import requests
+    import psycopg2
 
-프론트엔드(main_ui.py)는 아래 4가지 type 을 파싱합니다:
-    node_start  → 노드 시작 (타이머 시작)
-    node_end    → 노드 종료 (소요 시간 계산)
-    answer      → 스트리밍 답변 토큰
-    status      → 일반 상태 메시지 (선택)
-    warning     → 경고
-    error       → 오류
-"""
-
-import asyncio
-import json
-import time
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-
-app = FastAPI()
-
-
-def sse(payload: dict) -> str:
-    """SSE 프레임 직렬화 헬퍼."""
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-async def run_langgraph_stream(message: str, thread_id: str):
-    """
-    LangGraph astream_events 를 순회하며 SSE 이벤트를 yield 합니다.
-
-    on_chain_start / on_chain_end 이벤트에서 node 이름을 추출하고
-    perf_counter 로 소요 시간을 측정한 뒤 node_start / node_end 를 전송합니다.
-    """
-    # 노드 → 표준 이름 매핑 (LangGraph 내부 체인 이름 → 프론트엔드 key)
-    NODE_MAP = {
-        "rewriter_chain":   "rewriter",
-        "retriever_chain":  "retriever",
-        "reranker_chain":   "reranker",
-        "specialist_chain": "specialist",
-        "verifier_chain":   "verifier",
-    }
-
-    node_start_times: dict[str, float] = {}
-
-    # ── 예시: your_graph 는 실제 컴파일된 LangGraph 인스턴스
-    # async for event in your_graph.astream_events(
-    #     {"input": message},
-    #     config={"configurable": {"thread_id": thread_id}},
-    #     version="v2",
-    # ):
-
-    # ────────── 아래는 실제 이벤트 처리 로직 예시 ──────────
-    async for event in _PLACEHOLDER_stream(message):
-        event_name = event.get("event", "")
-        run_name   = event.get("name", "")
-
-        node_key = NODE_MAP.get(run_name)
-
-        # ── 노드 시작
-        if event_name == "on_chain_start" and node_key:
-            node_start_times[node_key] = time.perf_counter()
-            yield sse({"type": "node_start", "node": node_key})
-
-        # ── 노드 종료
-        elif event_name == "on_chain_end" and node_key:
-            elapsed = time.perf_counter() - node_start_times.get(node_key, time.perf_counter())
-            yield sse({"type": "node_end", "node": node_key, "elapsed": round(elapsed, 3)})
-
-        # ── LLM 스트리밍 청크 → answer 이벤트
-        elif event_name == "on_chat_model_stream":
-            chunk_text = event.get("data", {}).get("chunk", {}).get("content", "")
-            if chunk_text:
-                # 누적 answer 를 보내거나 delta 를 보낼 수 있음
-                # 프론트엔드는 content 를 그대로 덮어쓰므로 누적 전송 권장
-                yield sse({"type": "answer", "content": chunk_text})
-
-        # ── 기타 상태 메시지
-        elif event_name == "on_custom_event":
-            yield sse({"type": "status", "content": event.get("data", {}).get("message", "")})
-
-
-async def _PLACEHOLDER_stream(message: str):
-    """
-    실제 LangGraph 스트림 대신 사용하는 플레이스홀더.
-    실제 구현 시 이 함수를 제거하고 your_graph.astream_events(...)를 사용하세요.
-    """
-    nodes = [
-        "rewriter_chain", "retriever_chain",
-        "reranker_chain", "specialist_chain", "verifier_chain",
-    ]
-    for n in nodes:
-        yield {"event": "on_chain_start", "name": n}
-        await asyncio.sleep(0.4)   # 시뮬레이션
-        yield {"event": "on_chain_end",   "name": n}
-    for word in ["안녕하세요! ", "질문을 ", "처리했습니다."]:
-        yield {"event": "on_chat_model_stream", "data": {"chunk": {"content": word}}}
-        await asyncio.sleep(0.05)
-
-
-@app.post("/chat")
-async def chat_endpoint(body: dict):
-    message   = body.get("message", "")
-    thread_id = body.get("thread_id", "default")
-
-    return StreamingResponse(
-        run_langgraph_stream(message, thread_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # Nginx 프록시 버퍼링 비활성화
-        },
+    from app.core.database import (
+        get_connection_kwargs,
+        open_optional_ssh_tunnel
     )
+
+    API_BASE = "http://localhost:8000"
+
+    def _admin_logout():
+        token = st.session_state.get("access_token")
+        headers = {"Authorization": f"Bearer {token}"} if token else None
+        try:
+            requests.post(f"{API_BASE}/auth/logout", headers=headers, timeout=5)
+        except Exception:
+            pass
+
+        st.session_state.user = None
+        st.session_state.authenticated = False
+        st.session_state.access_token = None
+        st.session_state.force_logged_out = True
+        st.session_state.cookie_restore_attempted = False
+        st.session_state.cookie_restore_attempt_count = 0
+        st.session_state.auth_route = "home"
+
+        controller = st.session_state.get("cookie_controller")
+        if controller:
+            try:
+                controller.remove("weld_access_token", path="/", same_site="lax")
+                controller.set("weld_access_token", "", max_age=0, path="/")
+            except Exception:
+                pass
+        backup_manager = st.session_state.get("cookie_manager_auth")
+        if backup_manager:
+            try:
+                backup_manager.delete("weld_access_token")
+            except Exception:
+                pass
+
+        import time
+        st.query_params.clear()
+        st.query_params["public"] = "main"
+        time.sleep(0.5)
+        st.rerun()
+
+    # -----------------------------
+    # Page Config
+    # -----------------------------
+    st.set_page_config(
+        page_title="WELD-BOT Admin",
+        page_icon="🤖",
+        layout="wide"
+    )
+
+    # -----------------------------
+    # CSS
+    # -----------------------------
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;500;700&display=swap');
+
+        :root {
+            --nav-h: 64px;
+            --line: rgba(120, 190, 220, 0.20);
+            --primary: #ff6a3d;
+            --secondary: #2ec5ff;
+        }
+
+        html, body { margin: 0 !important; padding: 0 !important; }
+
+        [data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stSidebar"],
+        section[data-testid="stSidebar"] { display: none !important; }
+
+        .stApp { background-color: #f2f2f2; }
+
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] { padding-top: 0 !important; margin-top: 0 !important; }
+
+        [data-testid="stMainBlockContainer"] { padding-top: 0 !important; margin-top: 0 !important; }
+
+        /* ── 전체 컨테이너 여백 추가 ── */
+        .block-container {
+            max-width: 100% !important;
+            padding: 0 80px 3rem 80px !important; /* 양끝 80px 여백으로 넉넉하게 확대 */
+        }
+
+        /* ── 네비게이션 바 ── */
+        .nav {
+            display: flex;
+            align-items: center;
+            height: var(--nav-h);
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 0 80px; /* 본문 여백과 동일하게 맞춤 */
+            background: #000;
+            border-bottom: 1px solid var(--line);
+            z-index: 9998;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-dot {
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--secondary), var(--primary));
+            box-shadow: 0 0 20px rgba(46,197,255,0.8);
+        }
+
+        .logo-name {
+            font-size: 0.95rem;
+            font-weight: 650;
+            color: #dbf5ff;
+            letter-spacing: 0.08em;
+        }
+
+        .admin-badge {
+            margin-left: 10px;
+            padding: 2px 9px;
+            border-radius: 20px;
+            font-size: 0.70rem;
+            font-weight: 700;
+            color: var(--primary);
+            border: 1px solid rgba(255,106,61,0.5);
+            background: rgba(255,106,61,0.12);
+            letter-spacing: 0.04em;
+        }
+
+        .nav-user {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            margin-right: 20px;
+            font-size: 0.82rem;
+            color: #aaa;
+            font-weight: 600;
+        }
+
+        .nav-user-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 6px rgba(34,197,94,0.8);
+        }
+
+        .nav-btns {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .nav-btns a {
+            display: inline-block;
+            padding: 7px 20px;
+            border-radius: 8px;
+            font-size: 0.84rem;
+            font-weight: 700;
+            text-decoration: none !important;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .btn-home {
+            color: #fff !important;
+            border: 1.5px solid rgba(255,255,255,0.3);
+        }
+        .btn-home:hover { background: rgba(255,255,255,0.08); }
+
+        .btn-chat {
+            color: var(--secondary) !important;
+            border: 1.5px solid rgba(46,197,255,0.4);
+        }
+        .btn-chat:hover { background: rgba(46,197,255,0.08); }
+
+        .btn-monitor {
+            color: #22c55e !important;
+            border: 1.5px solid rgba(34,197,94,0.4);
+        }
+        .btn-monitor:hover { background: rgba(34,197,94,0.08); }
+
+        .btn-logout {
+            color: var(--primary) !important;
+            border: 1.5px solid rgba(255,106,61,0.4);
+        }
+        .btn-logout:hover { background: rgba(255,106,61,0.08); }
+
+        .content-spacer { height: calc(var(--nav-h) + 28px); }
+
+        /* ── 페이지 타이틀 ── */
+        .page-header {
+            padding: 0 0 20px 0; /* 컨테이너에 여백을 주었으므로 개별 여백 제거 */
+        }
+
+        .page-title {
+            font-size: 1.9rem;
+            font-weight: 800;
+            color: #1a1a1a;
+            margin: 0 0 5px 0;
+            letter-spacing: -0.02em;
+        }
+
+        .page-caption {
+            font-size: 0.88rem;
+            color: #888;
+            font-family: 'Noto Serif KR', serif;
+        }
+
+        /* ── 탭 ── */
+        .stTabs [data-baseweb="tab-list"] {
+            background: transparent !important;
+            padding: 0 !important; /* 컨테이너 여백과 정렬을 맞추기 위해 제거 */
+            border-bottom: 1.5px solid rgba(0,0,0,0.10) !important;
+            gap: 0 !important;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            background: transparent !important;
+            color: #999 !important;
+            border: none !important;
+            border-bottom: 2.5px solid transparent !important;
+            padding: 12px 22px !important;
+            font-size: 0.87rem !important;
+            font-weight: 600 !important;
+            margin-bottom: -1.5px !important;
+            letter-spacing: 0.01em !important;
+        }
+
+        .stTabs [aria-selected="true"] {
+            color: #111 !important;
+            border-bottom: 2.5px solid #111 !important;
+            background: transparent !important;
+        }
+
+        .stTabs [data-baseweb="tab-panel"] {
+            padding: 32px 0 !important; /* 컨테이너 여백과 정렬을 맞추기 위해 좌우여백 제거 */
+            background: transparent !important;
+        }
+
+        /* ── 섹션 헤더 ── */
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: #1a1a1a;
+            margin: 0 0 4px 0;
+            letter-spacing: -0.01em;
+        }
+
+        .section-sub {
+            font-size: 0.84rem;
+            color: #999;
+            margin: 0 0 24px 0;
+            font-family: 'Noto Serif KR', serif;
+        }
+
+        /* ── 버튼 ── */
+        .stButton > button {
+            background: #000 !important;
+            color: #fff !important;
+            border: 1.5px solid #000 !important;
+            border-radius: 8px !important;
+            font-weight: 700 !important;
+            font-size: 0.88rem !important;
+            padding: 8px 20px !important;
+            transition: background 0.15s !important;
+        }
+        .stButton > button:hover {
+            background: #222 !important;
+        }
+
+        /* form submit 버튼 */
+        .stFormSubmitButton > button {
+            background: #000 !important;
+            color: #fff !important;
+            border: 1.5px solid #000 !important;
+            border-radius: 8px !important;
+            font-weight: 700 !important;
+            font-size: 0.88rem !important;
+        }
+        .stFormSubmitButton > button:hover {
+            background: #222 !important;
+        }
+
+        /* ── 인풋 / 셀렉트박스 ── */
+        .stTextInput > div > div > input {
+            border-radius: 8px !important;
+            border: 1.5px solid rgba(0,0,0,0.15) !important;
+            background: #fff !important;
+            font-size: 0.88rem !important;
+        }
+
+        .stSelectbox > div > div {
+            border-radius: 8px !important;
+            border: 1.5px solid rgba(0,0,0,0.15) !important;
+            background: #fff !important;
+        }
+
+        /* ── 파일 업로더 ── */
+        [data-testid="stFileUploader"] {
+            border-radius: 10px !important;
+            background: #f2f2f2 !important;
+            border: 1.5px dashed rgba(0,0,0,0.15) !important;
+        }
+
+        .content-spacer { height: calc(var(--nav-h) + 28px); }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # -----------------------------
+    # 네비게이션 바 (HTML 링크 기반)
+    # -----------------------------
+    user = st.session_state.get("user")
+    username = user.get("username") if isinstance(user, dict) else st.session_state.get("username", "Unknown")
+
+    st.markdown(
+        f"""
+        <div class="nav">
+            <a class="logo" href="/?route=home" target="_self" style="text-decoration: none;">
+                <div class="logo-dot"></div>
+                <div class="logo-name">WELDPILOT AI</div>
+                <span class="admin-badge">ADMIN</span>
+            </a>
+            <div class="nav-user">
+                <div class="nav-user-dot"></div>
+                {username} 접속 중
+            </div>
+            <div class="nav-btns">
+                <a class="btn-home" href="/?route=home" target="_self">Home</a>
+                <a class="btn-chat" href="/?route=chat" target="_self">Chat</a>
+                <a class="btn-monitor" href="/?route=monitoring" target="_self">Monitoring</a>
+                <a class="btn-logout" href="/?route=logout" target="_self">Logout</a>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='content-spacer'></div>", unsafe_allow_html=True)
+
+    # -----------------------------
+    # 페이지 타이틀
+    # -----------------------------
+    st.markdown(
+        """
+        <div class="page-header">
+            <div class="page-title">관리자 통합 대시보드</div>
+            <div class="page-caption">WELD-BOT 문서 관리 · Vector DB · 로그 모니터링</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # -----------------------------
+    # 탭
+    # -----------------------------
+    ENABLE_LEGACY_VECTOR_REGISTRY_TAB = False
+
+    if ENABLE_LEGACY_VECTOR_REGISTRY_TAB:
+        tab1, tab2, tab5, tab3, tab4 = st.tabs([
+            "Ingestion",
+            "Vector Registry (Legacy)",
+            "Embedding 상태관리",
+            "Users",
+            "Model Settings",
+        ])
+    else:
+        tab1, tab5, tab3, tab4 = st.tabs([
+            "Ingestion",
+            "Embedding 상태관리",
+            "Users",
+            "Model Settings",
+        ])
+
+    # =====================================================
+    # TAB 1 - INGESTION
+    # =====================================================
+    with tab1:
+
+        st.markdown(
+            """
+            <div class="section-title">PDF Ingestion Pipeline</div>
+            <div class="section-sub">Parse &rarr; Preview &rarr; Commit 순서로 진행됩니다.</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        admin_name = st.text_input(
+            "승인 관리자 성명 (사번/이름)",
+            placeholder="예: 12345/홍길동"
+        )
+
+        parser_choice = st.radio(
+            "파싱 엔진 선택",
+            ["marker", "pymupdf4llm"],
+            horizontal=True
+        )
+
+        st.markdown(
+            "<div style='font-size: 0.875rem; font-weight: 400; margin-bottom: 0.25rem;'>PDF 매뉴얼 업로드</div>",
+            unsafe_allow_html=True,
+        )
+        uploaded_file = st.file_uploader(
+            "PDF 매뉴얼 업로드",
+            type=["pdf"],
+            label_visibility="collapsed",
+        )
+
+        if "preview_md" not in st.session_state:
+            st.session_state.preview_md = None
+            st.session_state.preview_json = None
+            st.session_state.preview_filename = None
+            st.session_state.preview_filebytes = None
+            st.session_state.already_exists = False
+
+        if uploaded_file and admin_name:
+            if st.button("파싱 시작 (Preview)"):
+                with st.spinner("Parsing..."):
+                    token = st.session_state.get("access_token")
+                    headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+                    files = {
+                        "file": (
+                            uploaded_file.name,
+                            uploaded_file.getvalue(),
+                            "application/pdf"
+                        )
+                    }
+
+                    data_payload = {
+                        "parser": parser_choice,
+                        "admin_name": admin_name
+                    }
+
+                    res = requests.post(
+                        f"{API_BASE}/admin/parse_pdf_preview",
+                        files=files,
+                        data=data_payload,
+                        headers=headers,
+                        timeout=600
+                    )
+
+                    if res.status_code == 200:
+                        data = res.json()
+                        st.session_state.preview_md = data["markdown_text"]
+                        st.session_state.preview_json = data["metadata_json"]
+                        st.session_state.preview_filename = uploaded_file.name
+                        st.session_state.preview_filebytes = uploaded_file.getvalue()
+                        st.session_state.already_exists = data.get("already_exists", False)
+                        st.success("파싱 완료")
+                    else:
+                        st.error(res.text)
+
+        # Preview Section
+        if st.session_state.preview_md:
+
+            st.divider()
+
+            st.markdown(
+                '<div class="section-title">Preview</div>',
+                unsafe_allow_html=True,
+            )
+
+            if st.session_state.already_exists:
+                st.warning("동일 파일이 이미 존재합니다. 승인 시 기존 데이터를 덮어씁니다.")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**Markdown**")
+                with st.container(height=600):
+                    st.code(st.session_state.preview_md, language="markdown")
+
+            with col2:
+                st.markdown("**Metadata JSON**")
+                with st.container(height=600):
+                    st.code(st.session_state.preview_json, language="json")
+
+            col_btn1, col_btn2 = st.columns([1, 1])
+
+            with col_btn1:
+                if st.button("승인 및 DB 적재", type="primary", use_container_width=True):
+                    with st.spinner("Committing..."):
+                        token = st.session_state.get("access_token")
+                        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+                        files = {
+                            "file": (
+                                st.session_state.preview_filename,
+                                st.session_state.preview_filebytes,
+                                "application/pdf"
+                            )
+                        }
+
+                        payload = {
+                            "markdown_text": st.session_state.preview_md,
+                            "metadata_json": st.session_state.preview_json,
+                            "admin_name": admin_name
+                        }
+
+                        res = requests.post(
+                            f"{API_BASE}/admin/commit_pdf",
+                            files=files,
+                            data=payload,
+                            headers=headers,
+                            timeout=600
+                        )
+
+                        if res.status_code == 200:
+                            data = res.json()
+                            st.success("DB 반영 완료")
+                            st.metric("Total Chunks", data.get("total_chunks_parsed", 0))
+                            st.metric("Inserted", data.get("db_chunks_inserted", 0))
+                            st.session_state.preview_md = None
+                            st.rerun()
+                        else:
+                            st.error(res.text)
+
+            with col_btn2:
+                if st.button("취소", use_container_width=True):
+                    st.session_state.preview_md = None
+                    st.rerun()
+
+    # =====================================================
+    # TAB 2 - VECTOR REGISTRY (Legacy)
+    # =====================================================
+    if ENABLE_LEGACY_VECTOR_REGISTRY_TAB:
+        with tab2:
+
+            st.markdown(
+                """
+                <div class="section-title">Vector DB Registry</div>
+                <div class="section-sub">등록된 문서와 청크 현황을 확인하고 삭제할 수 있습니다.</div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            token = st.session_state.get("access_token")
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+            res = requests.get(f"{API_BASE}/admin/registry", headers=headers)
+
+            if res.status_code == 200:
+                docs = res.json().get("documents", [])
+
+                if docs:
+                    df = pd.DataFrame(docs)
+
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("총 문서 수", len(df))
+                    col2.metric("총 청크 수", df["chunk_count"].sum())
+                    col3.metric("최근 업로드", df["created_at"].max())
+
+                    st.dataframe(df, use_container_width=True)
+
+                    st.warning("삭제 시 DB + S3 + 인덱스 데이터가 모두 제거됩니다.")
+
+                    delete_targets = st.multiselect(
+                        "삭제할 문서 선택",
+                        df["source_key"].tolist()
+                    )
+
+                    if st.button("선택 삭제", type="primary") and delete_targets:
+                        del_res = requests.delete(
+                            f"{API_BASE}/admin/registry",
+                            headers=headers,
+                            json={"source_keys": delete_targets}
+                        )
+                        if del_res.status_code == 200:
+                            st.success("삭제 완료")
+                            st.rerun()
+                        else:
+                            st.error(del_res.text)
+                else:
+                    st.info("저장된 문서가 없습니다.")
+
+    # =====================================================
+    # TAB 3 - USERS
+    # =====================================================
+    with tab3:
+
+        st.markdown(
+            """
+            <div class="section-title">User Registrations</div>
+            <div class="section-sub">가입한 사용자 목록을 확인합니다. (최근 50명)</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        try:
+            with open_optional_ssh_tunnel() as tunnel:
+                conn_args = get_connection_kwargs()
+
+                if tunnel:
+                    conn_args["host"] = tunnel["host"]
+                    conn_args["port"] = tunnel["port"]
+
+                with psycopg2.connect(**conn_args) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT id, username, role, created_at
+                            FROM users
+                            ORDER BY created_at DESC
+                            LIMIT 50
+                        """)
+                        users = cur.fetchall()
+
+            if users:
+                user_df = pd.DataFrame(
+                    users,
+                    columns=["ID", "Username", "Role", "Created At"]
+                )
+                st.dataframe(user_df, use_container_width=True)
+            else:
+                st.info("가입한 사용자가 없습니다.")
+
+        except Exception as e:
+            st.error(f"DB 오류: {e}")
+
+    # =====================================================
+    # TAB 4 - MODEL SETTINGS
+    # =====================================================
+    with tab4:
+
+        st.markdown(
+            """
+            <div class="section-title">LLM 모델 설정</div>
+            <div class="section-sub">Fast / Accurate 모델을 변경하면 다음 요청부터 즉시 반영됩니다.</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        token = st.session_state.get("access_token")
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        try:
+            model_res = requests.get(
+                f"{API_BASE}/admin/models",
+                headers=headers,
+                timeout=15,
+            )
+        except Exception as e:
+            st.error(f"모델 설정 조회 실패: {e}")
+            return
+
+        if model_res.status_code != 200:
+            st.error(model_res.text)
+            return
+
+        model_data = model_res.json()
+        current_fast = model_data.get("model_fast", "")
+        current_accurate = model_data.get("model_accurate", "")
+        available_models = model_data.get("available_models", [])
+
+        st.info(
+            f"현재 설정 | Fast: `{current_fast}` | Accurate: `{current_accurate}`"
+        )
+
+        fast_options = list(dict.fromkeys(([current_fast] if current_fast else []) + available_models))
+        accurate_options = list(dict.fromkeys(([current_accurate] if current_accurate else []) + available_models))
+
+        if not fast_options:
+            st.warning("사용 가능한 모델 목록이 비어 있습니다.")
+            return
+
+        with st.form("model_settings_form"):
+            selected_fast = st.selectbox(
+                "Fast 모델 (재작성 / 분류 / 검증)",
+                fast_options,
+                index=fast_options.index(current_fast) if current_fast in fast_options else 0,
+            )
+            selected_accurate = st.selectbox(
+                "Accurate 모델 (최종 답변 생성)",
+                accurate_options,
+                index=accurate_options.index(current_accurate) if current_accurate in accurate_options else 0,
+            )
+
+            st.caption("목록에 없는 모델은 아래 커스텀 입력으로 직접 지정할 수 있습니다.")
+            custom_fast = st.text_input("Fast 모델 커스텀 입력 (선택)")
+            custom_accurate = st.text_input("Accurate 모델 커스텀 입력 (선택)")
+
+            save_btn = st.form_submit_button("모델 설정 저장", type="primary")
+
+        if save_btn:
+            payload = {
+                "model_fast": custom_fast.strip() or selected_fast,
+                "model_accurate": custom_accurate.strip() or selected_accurate,
+            }
+
+            update_res = requests.put(
+                f"{API_BASE}/admin/models",
+                headers=headers,
+                json=payload,
+                timeout=15,
+            )
+
+            if update_res.status_code == 200:
+                st.success("모델 설정이 저장되었습니다. 다음 요청부터 즉시 반영됩니다.")
+                st.rerun()
+
+            error_detail = update_res.text
+            try:
+                error_detail = update_res.json().get("detail", error_detail)
+            except Exception:
+                pass
+            st.error(f"저장 실패: {error_detail}")
+
+    # =====================================================
+    # TAB 5 - EMBEDDING STATUS MANAGEMENT
+    # =====================================================
+    with tab5:
+
+        st.markdown(
+            """
+            <div class="section-title">임베딩 비활성화 관리</div>
+            <div class="section-sub">파일명/관리자/업로드일로 검색 후 use_yn 상태를 변경할 수 있습니다.</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        token = st.session_state.get("access_token")
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        if "embedding_search_rows" not in st.session_state:
+            st.session_state.embedding_search_rows = []
+        if "embedding_search_ran" not in st.session_state:
+            st.session_state.embedding_search_ran = False
+
+        with st.form("embedding_search_form"):
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                search_file_name = st.text_input("파일명")
+            with col2:
+                search_creator = st.text_input("관리자 ID")
+            with col3:
+                search_date = st.text_input("업로드 날짜 (YYYY-MM-DD)")
+            with col4:
+                search_use_yn = st.selectbox("상태", ["ALL", "Y", "N"], index=0)
+            with col5:
+                search_limit = st.selectbox("최대 건수", [100, 200, 500, 1000], index=1)
+
+            run_search = st.form_submit_button("검색", type="primary")
+
+        if run_search:
+            params = {"use_yn": search_use_yn, "limit": search_limit}
+            if search_file_name.strip():
+                params["file_name"] = search_file_name.strip()
+            if search_creator.strip():
+                params["creator"] = search_creator.strip()
+            if search_date.strip():
+                params["uploaded_date"] = search_date.strip()
+
+            try:
+                search_res = requests.get(
+                    f"{API_BASE}/admin/embeddings/search",
+                    headers=headers,
+                    params=params,
+                    timeout=20,
+                )
+                if search_res.status_code == 200:
+                    st.session_state.embedding_search_rows = search_res.json().get("documents", [])
+                    st.session_state.embedding_search_ran = True
+                else:
+                    st.error(search_res.text)
+                    st.session_state.embedding_search_rows = []
+                    st.session_state.embedding_search_ran = True
+            except Exception as e:
+                st.error(f"검색 실패: {e}")
+                st.session_state.embedding_search_rows = []
+                st.session_state.embedding_search_ran = True
+
+        rows = st.session_state.get("embedding_search_rows", [])
+        if not st.session_state.get("embedding_search_ran"):
+            st.info("검색 조건을 입력하고 검색 버튼을 눌러주세요.")
+        elif not rows:
+            st.info("검색 결과가 없습니다.")
+        else:
+            df = pd.DataFrame(rows)
+            view_col, pick_col = st.columns([3, 2])
+
+            with view_col:
+                st.dataframe(df, use_container_width=True)
+
+            with pick_col:
+                selector_df = df[["source_key", "creator", "use_yn"]].copy()
+                selector_df.insert(0, "선택", False)
+                edited_selector_df = st.data_editor(
+                    selector_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    disabled=["source_key", "creator", "use_yn"],
+                    column_config={
+                        "선택": st.column_config.CheckboxColumn("선택"),
+                        "source_key": st.column_config.TextColumn("파일"),
+                        "creator": st.column_config.TextColumn("관리자"),
+                        "use_yn": st.column_config.TextColumn("상태"),
+                    },
+                    key="embedding_selector_editor",
+                )
+                selected_sources = edited_selector_df.loc[
+                    edited_selector_df["선택"], "source_key"
+                ].tolist()
+                st.caption(f"선택된 파일: {len(selected_sources)}개")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                deactivate_btn = st.button("선택 비활성화 (N)", type="primary", use_container_width=True)
+            with col_b:
+                activate_btn = st.button("선택 활성화 (Y)", use_container_width=True)
+
+            if deactivate_btn and selected_sources:
+                res = requests.put(
+                    f"{API_BASE}/admin/embeddings/use_yn",
+                    headers=headers,
+                    json={"source_keys": selected_sources, "use_yn": "N"},
+                    timeout=30,
+                )
+                if res.status_code == 200:
+                    st.success("비활성화 완료. BM25 캐시에서 해당 문서가 제거됩니다.")
+                    st.rerun()
+                else:
+                    st.error(res.text)
+            elif deactivate_btn:
+                st.warning("비활성화할 파일을 먼저 선택해 주세요.")
+
+            if activate_btn and selected_sources:
+                res = requests.put(
+                    f"{API_BASE}/admin/embeddings/use_yn",
+                    headers=headers,
+                    json={"source_keys": selected_sources, "use_yn": "Y"},
+                    timeout=30,
+                )
+                if res.status_code == 200:
+                    st.success("활성화 완료")
+                    st.rerun()
+                else:
+                    st.error(res.text)
+            elif activate_btn:
+                st.warning("활성화할 파일을 먼저 선택해 주세요.")

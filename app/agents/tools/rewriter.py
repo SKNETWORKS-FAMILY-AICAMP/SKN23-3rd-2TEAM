@@ -21,7 +21,7 @@ from pathlib import Path
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.schemas.state import GraphState
-from app.core.config import MODEL_FAST
+from app.core.config import get_model_fast
 
 # ─────────────────────────────────────────────────────────────
 # [1단계] 현장 은어 사전 — JARGON_MAP (O(1) 검색 최적화)
@@ -314,7 +314,7 @@ def rewrite_query(original_query: str, chat_history: str = "") -> Tuple[str, str
     print(f"[Rewriter] 원본:   '{original_query}'")
     print(f"[Rewriter] 정규화: '{normalized}'")
 
-    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
+    llm = ChatOpenAI(model=get_model_fast(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", QUERY_REWRITER_PROMPT),
         ("human", "변환해주세요."),
@@ -340,6 +340,10 @@ def rewrite_query(original_query: str, chat_history: str = "") -> Tuple[str, str
 async def rewriter_node(state: GraphState) -> dict:
     print("--- [Node: Rewriter] 쿼리 최적화 중 ---")
     messages = state.get("messages", [])
+    
+    # [Step 5] 런타임 디버깅 로그 추가
+    print(f"🐛 [Debug] 불러온 이전 메시지 개수: {len(messages)}")
+
     if not messages:
         return {"rewritten_query": "", "original_question": "", "routing_hint": ""}
 
@@ -382,7 +386,7 @@ async def feedback_rewriter_node(state: GraphState) -> dict:
     print(f"[FeedbackRewriter] 기존 쿼리: '{prev_query[:80]}'")
     print(f"[FeedbackRewriter] 피드백:   '{feedback[:100]}'")
 
-    llm = ChatOpenAI(model=MODEL_FAST, temperature=0)
+    llm = ChatOpenAI(model=get_model_fast(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", FEEDBACK_REWRITER_PROMPT),
         ("human", "쿼리를 재작성해주세요."),

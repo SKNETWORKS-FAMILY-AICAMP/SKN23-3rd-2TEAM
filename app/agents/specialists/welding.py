@@ -7,24 +7,25 @@
 #   from app.rag.pipeline import run_rag_pipeline         -- RAG 문서 검색
 #   from app.core.security import verify_hallucination    -- 환각 검증 (선택 사용)
 # ============================================================
+import asyncio
 from app.rag.pipeline import run_rag_pipeline
 from app.core.security import verify_hallucination
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import WELDING_SPECIALIST_PROMPT
 from app.schemas.state import GraphState
-from app.core.config import MODEL_ACCURATE
+from app.core.config import get_model_accurate
 
-async def generate_welding_answer(query: str, context: str) -> str:
-    """RAG Context를 사용하여 용접 특화 답변을 생성합니다 (async)."""
-    llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0)
+async def generate_welding_answer(query: str, context: str, chat_history: str = "") -> str:
+    """RAG Context 및 대화 맥락을 사용하여 용접 특화 답변을 생성합니다 (async)."""
+    llm = ChatOpenAI(model=get_model_accurate(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", WELDING_SPECIALIST_PROMPT),
-        ("human", "{query}")
+        ("human", "대화 명세:\n{chat_history}\n\n[현재 질문]\n{query}")
     ])
     chain = prompt | llm
     print("[Welding Agent] 용접 전문가가 답변을 생성 중입니다...")
-    response = await chain.ainvoke({"context": context, "query": query})  # [FIX] async
+    response = await chain.ainvoke({"context": context, "query": query, "chat_history": chat_history})
     return response.content
 
 
@@ -37,10 +38,17 @@ async def welding_node(state: GraphState) -> dict:
     original_query = messages[-1].content if messages else ""
     original_question = state.get("original_question") or original_query
 
+    # [Memory Injection] 이전 대화 기록 확보
+    history_msgs = messages[:-1]
+    chat_history = "\n".join([
+        f"{'사용자' if msg.type == 'human' else 'AI'}: {msg.content}"
+        for msg in history_msgs
+    ]) if history_msgs else "이전 대화 없음"
+
     search_query = state.get("rewritten_query") or original_query
     print(f"[Welding] 검색 쿼리: '{search_query}'")
 
-    context = run_rag_pipeline(search_query, domain="WELDING")
+    context, max_score = await asyncio.to_thread(run_rag_pipeline, search_query, domain="WELDING")
 
     # 제로히트(Zero-hit) 조기 종료
     if not context or len(context.strip()) < 30:
@@ -55,6 +63,7 @@ async def welding_node(state: GraphState) -> dict:
             "is_hallucinated": True, "retry_count": state.get("retry_count",0)+1,
             "verifier_feedback": feedback_msg, "domain_mismatch": False,
             "original_question": original_question,
+            "reranker_score": max_score,
         }
 
     # 도메인 불일치 감지
@@ -64,10 +73,12 @@ async def welding_node(state: GraphState) -> dict:
         return {
             "context": context, "generated_answer": "",
             "domain_mismatch": True, "original_question": original_question,
+            "reranker_score": max_score,
         }
 
-    generated_answer = await generate_welding_answer(original_query, context)  # [FIX] async
+    generated_answer = await generate_welding_answer(original_query, context, chat_history)
     return {
         "context": context, "generated_answer": generated_answer,
         "domain_mismatch": False, "original_question": original_question,
+        "reranker_score": max_score,
     }

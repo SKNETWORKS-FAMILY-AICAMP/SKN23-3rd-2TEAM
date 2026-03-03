@@ -7,24 +7,29 @@
 #   from app.rag.pipeline import run_rag_pipeline         -- RAG 문서 검색
 #   from app.core.security import verify_hallucination    -- 환각 검증 (선택 사용)
 # ============================================================
+import asyncio
 from app.rag.pipeline import run_rag_pipeline
 from app.core.security import verify_hallucination
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from app.core.prompts import ROBOTICS_SPECIALIST_PROMPT
 from app.schemas.state import GraphState
-from app.core.config import MODEL_ACCURATE
+from app.core.config import get_model_accurate
 
-async def generate_robotics_answer(query: str, context: str) -> str:
-    """RAG Context를 사용하여 로봇 특화 답변을 생성합니다 (async)."""
-    llm = ChatOpenAI(model=MODEL_ACCURATE, temperature=0)
+async def generate_robotics_answer(query: str, context: str, chat_history: str = "") -> str:
+    """RAG Context 및 대화 맥락을 사용하여 로봇 특화 답변을 생성합니다 (async)."""
+    llm = ChatOpenAI(model=get_model_accurate(), temperature=0)
     prompt = ChatPromptTemplate.from_messages([
         ("system", ROBOTICS_SPECIALIST_PROMPT),
         ("human", "{query}")
     ])
     chain = prompt | llm
     print("[Robotics Agent] 로봇 전문가가 답변을 생성 중입니다...")
-    response = await chain.ainvoke({"context": context, "query": query})  # [FIX] async
+    response = await chain.ainvoke({
+        "context": context, 
+        "chat_history": chat_history, 
+        "query": query
+    })
     return response.content
 
 # ── 도메인 불일치 감지 키워드 ──
@@ -62,6 +67,13 @@ async def robotics_node(state: GraphState) -> dict:
     # [원본 질문 보존] 최초 진입 시에만 저장 (멀티턴 피드백 루프 내 의도 유지)
     original_question = state.get("original_question") or original_query
 
+    # [Memory Injection] 이전 대화 기록 확보
+    history_msgs = messages[:-1]
+    chat_history = "\n".join([
+        f"{'사용자' if msg.type == 'human' else 'AI'}: {msg.content}"
+        for msg in history_msgs
+    ]) if history_msgs else "이전 대화 없음"
+
     # Query Rewriter가 확장한 쿼리를 우선 사용
     search_query = state.get("rewritten_query") or original_query
     print(f"[Robotics] 검색 쿼리: '{search_query}'")
@@ -75,7 +87,7 @@ async def robotics_node(state: GraphState) -> dict:
         filters = {"model_name": "Hi5"}
 
     # RAG 검색
-    context = run_rag_pipeline(search_query, domain="ROBOT", filters=filters)
+    context, max_score = await asyncio.to_thread(run_rag_pipeline, search_query, domain="ROBOT", filters=filters)
 
     # ① 제로히트(Zero-hit) 조기 종료
     # Reranker 엄갑 통과 문서가 0개이면 LLM 호출 없이 즉시 피드백 루프 진입
@@ -95,6 +107,7 @@ async def robotics_node(state: GraphState) -> dict:
             "verifier_feedback": feedback_msg,
             "domain_mismatch":   False,
             "original_question": original_question,
+            "reranker_score":    max_score,
         }
 
     # ② 도메인 불일치 감지 — context가 로봇 관련 내용이 아니면 supervisor 재분류
@@ -105,13 +118,15 @@ async def robotics_node(state: GraphState) -> dict:
             "generated_answer": "",
             "domain_mismatch":  True,
             "original_question": original_question,
+            "reranker_score":   max_score,
         }
 
     # ② 정상: 도메인 일치 → 답변 생성
-    generated_answer = await generate_robotics_answer(original_query, context)
+    generated_answer = await generate_robotics_answer(original_query, context, chat_history)
     return {
         "context":           context,
         "generated_answer":  generated_answer,
         "domain_mismatch":   False,
         "original_question": original_question,
+        "reranker_score":    max_score,
     }
