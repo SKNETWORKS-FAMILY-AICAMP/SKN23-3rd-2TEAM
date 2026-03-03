@@ -13,9 +13,9 @@
 |------|---|---|
 |김도영|(팀장) EC2 서버 구축, 프론트 및 백 오류 수정 / 최적화|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/rubyheartsping)|
 |김민정|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/minjeong-kim-dev)|
-|송주엽|AI/RAG 시스템 아키텍트 및 풀스택(Backend/Frontend) 통합 개발|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUYEOP024)|
-|신승훈|UI 설계 및 ERD 작성|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
-|정희영|ERD 보완 및 프론트|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUNGHEEYOUNG9090)
+|신승훈|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
+|송주엽|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUYEOP024)|
+|정희영|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUNGHEEYOUNG9090)
     
 ## 2. 프로젝트 개요 (Project Overview)
 
@@ -319,8 +319,8 @@ Context 문자열 (출처 메타데이터 포함)
 |------|---|
 |김도영|AI를 다루는 본 교육과정의 마일스톤과도 같은 LLM 프로젝트에서 팀장을 맡게되었습니다. 비록 팀장으로서의 경험 부족으로 인해 프로젝트 과정에서 삐걱거림이 발생했으나 팀원분들의 도움 덕에 무사히 마칠 수 있어 깊이 감사를 전합니다. 저 개인적으로는 프로젝트를 거치며 LLM의 활용이 단순 API를 떼오는 것을 넘어 Langgraph나 RAG 등을 덧붙여 더욱 풍성해 질 수 있음을 깨닫기도 했습니다. 본 프로젝트의 경험이 본 과정 중 남은 두 프로젝트와 앞으로 실무에 있을 수많은 일들에 대해 든든한 밑바탕이 될 것이라 생각합니다.|
 |김민정|2|
-|송주엽|이번 프로젝트에서 가장 성공적이었던 부분은 제가 실제 용접 및 제조 현장에서 몸소 겪으며 뼈저리게 느꼈던 문제의식을 바탕으로, 프로젝트의 기획부터 핵심 아키텍처 설계까지 주도적으로 이끌었다는 점입니다. 단순한 AI 기술 도입에 그치지 않고, 현장의 오답이 초래할 치명적인 설비 파손과 안전 리스크를 누구보다 잘 알기에 LLM의 환각(Hallucination)을 원천 차단하는 '환각 검증기(Verifier)'를 직접 엄격하게 설계했습니다. 무엇보다 제가 과거 현장에서 직접 목격했던 '미숙련/외국인 노동자 증가로 인한 인력난'과 '스마트 팩토리로의 전환'이라는 비즈니스 목적을 중심에 두고, 흔들림 없이 팀의 방향성을 제시하며 프로젝트를 완수해 낸 것이 가장 큰 원동력이자 성과입니다.|
-|신승훈|처음 맡아본 UI 설계라 시행착오가 있었지만, 역할 화면의 동선과 구조를 끝까지 정리했습니다. 화면에 필요한 컴포넌트/레이아웃을 체계화하고, 서비스 흐름에 맞춰 ERD까지 작성해 데이터 구조를 명확히 했습니다. 그리고 UI는 보이는 디자인보다 사용 흐름과 데이터 구조를 먼저 잡는 게 핵심이였던걸 배웠던거 같습니다.|
-|정희영|이번 프로젝트는 후회가 많이 남는 프로젝트였습니다. 개발에 깊게 관여하지 못했고 맡은 바 역할을 확실하게 수행하지 못했기 때문입니다. 무엇보다 팀원들에게 미안하고 자기 자신에게 좌개감이 듭니다. 이번 프로젝트를 거울로 삼아 다음 프로젝트 때는 최선을 다하여 프로젝트에 많은 부분에 관여하여 수행하겠다는 다짐을 하게 되었습니다.|
-
-
+|신승훈|3|
+|송주엽|4|
+|정희영|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|
+# 9. 참고자료
+## 기술스택
