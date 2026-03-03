@@ -9,7 +9,7 @@
 |------|---|---|
 |김도영|팀장|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/rubyheartsping)|
 |김민정|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/minjeong-kim-dev)|
-|김승훈|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
+|신승훈|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
 |송주엽|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUYEOP024)|
 |정희영|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUNGHEEYOUNG9090)
     
@@ -255,7 +255,7 @@ Context 문자열 (출처 메타데이터 포함)
 |------|---|
 |김도영|갓도영|
 |김민정|2|
-|김승훈|3|
+|신승훈|3|
 |송주엽|4|
 |정희영|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|
 # 9. 참고자료
