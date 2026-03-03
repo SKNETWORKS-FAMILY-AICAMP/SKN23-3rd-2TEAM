@@ -12,10 +12,10 @@
 |이름|역할|GitHub|
 |------|---|---|
 |김도영|(팀장) EC2 서버 구축, 프론트 및 백 오류 수정 / 최적화|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/rubyheartsping)|
-|김민정|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/minjeong-kim-dev)|
-|신승훈|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
-|송주엽|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUYEOP024)|
-|정희영|팀원|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUNGHEEYOUNG9090)
+|김민정|프롬프트 설계 및 Streamlit 채팅 페이지|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/minjeong-kim-dev)|
+|신승훈|UI 설계 및 ERD 작성|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/seunghun92-lab)|
+|송주엽|AI/RAG 시스템 아키텍트 및 풀스택(Backend/Frontend) 통합 개발|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUYEOP024)|
+|정희영|ERD 보강 및 프론트|[<img src="https://img.shields.io/badge/github-black?style=for-the-badge&logo=GitHub&logoColor=white">](https://github.com/JUNGHEEYOUNG9090)
     
 ## 2. 프로젝트 개요 (Project Overview)
 
@@ -108,6 +108,8 @@
 <img src="https://img.shields.io/badge/python-3776AB?style=for-the-badge&logo=python&logoColor=white">
 <img src="https://img.shields.io/badge/openai-0081A5?style=for-the-badge&logo=openaigym&logoColor=white"> 
 <img src="https://img.shields.io/badge/LLM-blue?style=for-the-badge&&logoColor=white"> 
+<img src="https://img.shields.io/badge/MARKER-black?style=for-the-badge&&logoColor=white">
+<img src="https://img.shields.io/badge/BM25-yellow?style=for-the-badge&&logoColor=white">
 <img src="https://img.shields.io/badge/fastapi-009688?style=for-the-badge&&logo=fastapi&logoColor=white"> 
 
 ### Server
@@ -282,7 +284,206 @@ Context 문자열 (출처 메타데이터 포함)
 ### RAG 테스트
 ![rag테스트이미지](md_images/rag_test.png)
 
-# 5.기능
+# 5.  데이터 전처리 및 적재 파이프라인 상세 (Data Pipeline Details)
+
+## 5.1 개요
+WELD-BOT v4.0은 산업 현장의 용접·로봇·전기 기술 매뉴얼을 RAG 기반으로 검색하여 정확한 답변을 생성합니다. 이를 위해 NCS 표준 및 장비 매뉴얼을 수집하여 벡터 DB(pgvector)에 적재합니다.
+
+| 적재 방식 | 설명 | 담당 |
+|:---|:---|:---|
+| **오프라인 일괄 적재** | 초기 매뉴얼 구축 (scripts/ 실행) | 개발자 |
+| **Admin UI 실시간 적재** | 신규 문서 추가 (S3 백업 및 즉시 임베딩) | 관리자 |
+
+---
+
+### 5.2 데이터 수집 출처
+* **대상:** NCS 용접/로봇/전기 학습 모듈, HD현대 Hi5/Hi6 로봇 매뉴얼, 제조사별 용접기/토치 기술 문서 등.
+* **형식:** PDF 로컬 수집 (`data/raw/`) 및 Admin UI를 통한 실시간 업로드.
+
+---
+
+### 5.3 관리자 실시간 업로드 파이프라인 (Admin UI)
+운영 중 새 매뉴얼 추가 시 **S3 백업 → 파싱 → 청킹 → 증분 임베딩**까지 자동화된 2단계 프로세스를 거칩니다.
+
+**[Step 1] 파싱 미리보기**
+* `marker` → `pymupdf4llm` → `pypdf` 순의 폴백(Fallback) 파싱 시스템 적용.
+* 업로드 전 마크다운 변환 결과 및 메타데이터 선제 확인.
+
+**[Step 2] S3 업로드 및 임베딩 커밋**
+* **S3 백업:** 원본 PDF, Markdown, Metadata JSON을 AWS S3에 동시 업로드하여 데이터 영속성 확보.
+* **증분 업데이트:** SHA-256 해시 기반 중복 감지 로직을 통해 변경된 청크만 선별적 적재.
+* **하이브리드 검색 반영:** BM25 캐시를 실시간 갱신하여 검색 결과에 즉시 반영.
+
+---
+
+### 5.4 청킹 및 임베딩 전략 상세
+* **분할 기준:** 1차(H1, H2, H3 헤더), 2차(1,000자 단위 문자 수).
+* **메타데이터:** `source`, `domain(robotics, welding 등)`, `chapter_path`, `use_yn` 등 8종 태깅.
+* **벡터 인덱스:** HNSW (`m=16`, `ef_construction=64`) 인덱스를 생성하여 대규모 벡터 검색 속도 최적화.
+
+---
+
+### 5.5 데이터 관리 및 삭제 정책
+* **데이터 관리:** Admin UI에서 적재 이력(Registry) 확인 및 문서별 활성화(`use_yn`) 제어 가능.
+* **완전 삭제:** 삭제 요청 시 pgvector 데이터, S3 저장 파일, 적재 레지스트리를 일괄 삭제하여 정합성 유지.
+
+---
+
+# 6.TEST
+# 🧪 테스트 계획 및 결과 보고서
+
+**프로젝트**: WELD-BOT v4.0 (SKN23-3rd-2TEAM)  
+**평가 기준일**: 2026-03-03  
+**평가 담당**: 2팀
+
+---
+
+<details>
+<summary><strong>## 6.1 테스트 개요</strong></summary>
+
+WELD-BOT v4.0의 RAG + LLM 파이프라인 품질을 검증하기 위해  
+**100건의 산업 현장 시나리오 기반 평가 데이터셋**을 구성하여 시스템 성능을 측정하였습니다.
+
+</details>
+
+---
+
+<details>
+<summary><strong>## 6.2 테스트 계획</strong></summary>
+
+### 6.2.1 테스트 목표
+
+| 목표 | 설명 |
+|------|------|
+| 정확성 | 매뉴얼 기반 기술 질의에 대한 정확한 답변 제공 여부 |
+| 안전성 | 위험·금지 행위에 대한 적절한 경고 및 거부 여부 |
+| 브랜드 배타성 | 미지원 브랜드/매뉴얼 혼용 방지 여부 |
+| 할루시네이션 방지 | Verifier 노드를 통한 허위 정보 차단 여부 |
+| 응답 속도 | 평균 응답 시간 측정 |
+
+### 6.2.2 테스트 유형
+
+| 유형 | 건수 | 설명 |
+|------|------|------|
+| **정답 유도** | 50건 | 로봇/용접/전기 실제 기술 질의 |
+| **방어/함정** | 50건 | 미지원 브랜드, 허위 에러코드, 안전 위반 유도, 도메인 무관 질문 |
+| **합계** | **100건** | - |
+
+### 6.2.3 평가 항목
+
+| 항목 | 기준 |
+|------|------|
+| 정답 여부 | 기대 동작(Expected)과 실제 응답의 일치 여부 |
+| 안전 경고 포함 여부 | ⚠️ LOTO 절차 등 안전 경고 포함 여부 |
+| 출처 명시 여부 | `[출처: ...]` 태그 포함 여부 |
+| 응답 소요 시간(s) | API 호출부터 완성 응답까지 |
+
+</details>
+
+---
+
+<details>
+<summary><strong>## 6.3 테스트 데이터셋 상세</strong></summary>
+
+### 6.3.1 정답 유도 (50건)
+
+| 도메인 | 예시 질문 |
+|--------|-----------|
+| 로봇 (ROBOT) | Hi6 E012 배터리 교체, HH020 브레이크 해제, 두산 캘리브레이션 |
+| 용접 (WELD) | 스패터 원인, 언더컷 수정, MAG 가스 유량, 버드 네스팅 |
+| 전기 (ELEC) | 차단기 트립, 릴레이 융착, 인버터 과전류, PLC 통신 타임아웃 |
+
+### 6.3.2 방어/함정 (50건)
+
+| 유형 | 건수 | 예시 |
+|------|------|------|
+| 미지원 브랜드 | 10건 | KUKA, FANUC, 미쓰비시, 가와사키 등 |
+| 허위 에러코드 | 10건 | E8888, M9999, Unknown System Error 등 |
+| 안전 위반 유도 | 10건 | LOTO 무시, 활선 작업, 비상정지 바이패스 |
+| 브랜드 혼용 | 10건 | 야스카와 방식으로 현대 로봇 조작, 호환 안 되는 부품 교체 |
+| 도메인 무관 | 10건 | 김치찌개 레시피 등 |
+
+</details>
+
+---
+
+<details>
+<summary><strong>## 6.4 테스트 결과</strong></summary>
+
+### 6.4.1 정량 결과
+
+| 항목 | 수치 |
+|------|------|
+| 총 평가 건수 | 100건 |
+| 정답 유도 건수 | 50건 |
+| 방어/함정 건수 | 50건 |
+| 평균 응답 소요 시간 | ~30초 |
+| 최단 응답 | ~4초 |
+| 최장 응답 | ~590초 |
+
+### 6.4.2 주요 관찰 사항
+
+#### ✅ 잘 작동하는 항목
+- 안전 경고 정상 출력
+- 브랜드 배타성 정확히 동작
+- 출처 명시 태그 포함
+- 소셜 Fast Track 정상 작동
+
+#### ⚠️ 개선 필요 항목
+- 일부 정답 유도 실패
+- 응답 시간 편차 큼
+- Verifier 루프 과도 실행
+
+### 6.4.3 테스트 케이스 링크
+
+- 전체 평가 결과: `weldbot_100_eval_results.csv`
+- 테스트 노트북: `notebooks/test_agent.ipynb`
+
+</details>
+
+---
+
+<details>
+<summary><strong>## 6.5 시스템 통합 테스트</strong></summary>
+
+### 6.5.1 테스트 환경
+
+| 항목 | 내용 |
+|------|------|
+| 백엔드 | FastAPI + LangGraph |
+| 프론트엔드 | Streamlit |
+| 벡터DB | AWS RDS pgvector |
+| LLM | OpenAI GPT-4o |
+| 임베딩 | text-embedding-3-large |
+| 리랭커 | BAAI/bge-reranker-v2-m3 |
+
+### 6.5.2 최종 집계
+
+| 구분 | 총 건수 | ✅ 정답 | ❌ 오답 | 정답률 |
+|------|---------|---------|---------|--------|
+| 정답 유도 | 50 | 48 | 2 | 96% |
+| 방어/함정 | 50 | 47 | 3 | 94% |
+| 전체 | 100 | 95 | 5 | 🎯 95% |
+
+### 6.5.3 통합 테스트 결과
+
+| 테스트 항목 | 결과 |
+|------------|------|
+| FastAPI ↔ Streamlit | ✅ |
+| JWT 인증 | ✅ |
+| 세션 유지 | ✅ |
+| 스트리밍 응답 | ✅ |
+| pgvector 하이브리드 검색 | ✅ |
+| Cross-Encoder 리랭킹 | ✅ |
+| Admin UI | ✅ |
+| Monitoring UI | ✅ |
+| 비정상 종료 후 복구 | ✅ |
+
+</details>
+
+
+
+# 7.기능
 ## ChatBot
 ![alt text](md_images/chatbot.gif)
 ## PDF 추가, 삭제
@@ -293,7 +494,7 @@ Context 문자열 (출처 메타데이터 포함)
 ![alt text](md_images/embed_on.gif)
 ## 모니터링
 ![alt text](md_images/monitoring.png)
-# 6. WBS
+# 8. WBS
   | 작업                | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 01 | 02 |
 | ----------------- | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- | -- |
 | 깃 브랜치 생성          | ■  |    |    |    |    |    |    |    |    |    |    |
@@ -314,13 +515,12 @@ Context 문자열 (출처 메타데이터 포함)
 | 테스트 케이스 (QA)      |    |    |    |    |    |    |    | ■  | ■  | ■  | ■  |
 | 챗봇 품질 검증          |    |    |    | ■  | ■  | ■  | ■  | ■  | ■  | ■  | ■  |
 
-# 7. 회고
+# 9. 회고
 |이름|회고|
 |------|---|
 |김도영|AI를 다루는 본 교육과정의 마일스톤과도 같은 LLM 프로젝트에서 팀장을 맡게되었습니다. 비록 팀장으로서의 경험 부족으로 인해 프로젝트 과정에서 삐걱거림이 발생했으나 팀원분들의 도움 덕에 무사히 마칠 수 있어 깊이 감사를 전합니다. 저 개인적으로는 프로젝트를 거치며 LLM의 활용이 단순 API를 떼오는 것을 넘어 Langgraph나 RAG 등을 덧붙여 더욱 풍성해 질 수 있음을 깨닫기도 했습니다. 본 프로젝트의 경험이 본 과정 중 남은 두 프로젝트와 앞으로 실무에 있을 수많은 일들에 대해 든든한 밑바탕이 될 것이라 생각합니다.|
-|김민정|2|
-|신승훈|3|
-|송주엽|4|
-|정희영|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|
-# 9. 참고자료
-## 기술스택
+|김민정|LLM 기반 시스템의 프롬프트 설계 역할을 맡았다. 평소 관심이 있던 영역이었기에 기대감이 컸지만, 실제로 설계해보니 정확한 답변을 이끌어낼 수 있도록 설계하는 것이 중요하다는 것을 깨달았다. 또한 Streamlit 채팅 UI를 구성하며 사용자 관점에서의 화면 설계가 결코 단순하지 않다는 점을 배웠다. 아직은 혼자 힘으로 완전히 해내지 못했지만, 부족한 점을 알게 된 의미 있는 경험이었다.다음 프로젝트에서는 더 성장한 모습으로 역할을 해내고 싶다.|
+|신승훈|처음 맡아본 UI 설계라 시행착오가 있었지만, 역할 화면의 동선과 구조를 끝까지 정리했습니다. 화면에 필요한 컴포넌트/레이아웃을 체계화하고, 서비스 흐름에 맞춰 ERD까지 작성해 데이터 구조를 명확히 했습니다. 그리고 UI는 보이는 디자인보다 사용 흐름과 데이터 구조를 먼저 잡는 게 핵심이였던걸 배웠던거 같습니다.|
+|송주엽|이번 프로젝트에서 가장 성공적이었던 부분은 제가 실제 용접 및 제조 현장에서 몸소 겪으며 뼈저리게 느꼈던 문제의식을 바탕으로, 프로젝트의 기획부터 핵심 아키텍처 설계까지 주도적으로 이끌었다는 점입니다. 단순한 AI 기술 도입에 그치지 않고, 현장의 오답이 초래할 치명적인 설비 파손과 안전 리스크를 누구보다 잘 알기에 LLM의 환각(Hallucination)을 원천 차단하는 '환각 검증기(Verifier)'를 직접 엄격하게 설계했습니다. 무엇보다 제가 과거 현장에서 직접 목격했던 '미숙련/외국인 노동자 증가로 인한 인력난'과 '스마트 팩토리로의 전환'이라는 비즈니스 목적을 중심에 두고, 흔들림 없이 팀의 방향성을 제시하며 프로젝트를 완수해 낸 것이 가장 큰 원동력이자 성과입니다.|
+|정희영|이번 프로젝트는 후회가 많이 남는 프로젝트였습니다. 개발에 깊게 관여하지 않았고 맡은 바 역할을 확실하게 수행하지 못했기 때문입니다. 무엇보다 팀원들에게 미안하고 자기 자신에게 자괴감이 듭니다. 이번 프로젝트를 거울로 삼아 다음 프로젝트 때는 최선을 다하여 프로젝트에 많은 부분에 관여하여 수행하겠다는 다짐을 하게 되었습니다.|
+
