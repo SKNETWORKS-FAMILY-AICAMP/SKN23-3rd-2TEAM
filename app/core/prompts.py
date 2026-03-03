@@ -218,7 +218,7 @@ DEFAULT_EVAL_RET_PROMPT = """당신은 RAG 시스템의 검색(Retrieval) 품질
 
 [데이터]
 - 질문: {user_query}
-- 검색된 문서 조각들(총 {total_chunks}개):
+- 검색된 문서 조각들:
 {retrieved_chunks}
 
 반드시 아래의 JSON 형식으로만 출력하세요:
