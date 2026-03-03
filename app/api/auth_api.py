@@ -6,7 +6,7 @@ import psycopg2
 from typing import Optional
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status, Response, Cookie
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -20,10 +20,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "weld-bot-v4-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 FRONTEND_DEFAULT_REDIRECT_URI = os.getenv("FRONTEND_DEFAULT_REDIRECT_URI", "http://localhost:8501")
-COOKIE_NAME = "weld_auth_token"
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
-COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax")
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 # ---------------------------------------------------------
@@ -111,20 +107,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def set_auth_cookie(response: Response, access_token: str) -> None:
-    response.set_cookie(
-        key=COOKIE_NAME,
-        value=access_token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite=COOKIE_SAMESITE,
-        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/",
-    )
-
-def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=COOKIE_NAME, path="/")
-
 def is_provider_configured(provider: str) -> bool:
     if provider == "google":
         return bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
@@ -164,7 +146,7 @@ def consume_oauth_exchange_code(code: str) -> str:
 # Endpoints
 # ---------------------------------------------------------
 @router.post("/login")
-async def login(response: Response, username: str = Form(...), password: str = Form(...)):
+async def login(username: str = Form(...), password: str = Form(...)):
     user = db_get_oauth_user(username)
     if not user or not user["password"] or not verify_password(password, user["password"]):
         raise HTTPException(
@@ -176,8 +158,6 @@ async def login(response: Response, username: str = Form(...), password: str = F
         data={"sub": user["username"], "id": user["id"], "role": user["role"], "name": user["name"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-
-    set_auth_cookie(response, access_token)
 
     return {
         "message": "Login successful",
@@ -212,13 +192,12 @@ async def signup(username: str = Form(...), password: str = Form(...), name: str
     return {"message": "Signup successful"}
 
 @router.post("/logout")
-async def logout(response: Response):
-    clear_auth_cookie(response)
+async def logout():
     return {"message": "Logout successful"}
 
 @router.get("/me")
-async def get_me(request: Request, weld_auth_token: Optional[str] = Cookie(None)):
-    token = weld_auth_token or request.headers.get("Authorization", "").replace("Bearer ", "")
+async def get_me(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -281,7 +260,7 @@ async def oauth_callback(provider: str, request: Request):
     return RedirectResponse(url=redirect_url)
 
 @router.post("/oauth/exchange")
-async def oauth_exchange(response: Response, code: str = Form(...)):
+async def oauth_exchange(code: str = Form(...)):
     username = consume_oauth_exchange_code(code)
     user = db_get_oauth_user(username)
     if not user:
@@ -292,7 +271,6 @@ async def oauth_exchange(response: Response, code: str = Form(...)):
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
 
-    set_auth_cookie(response, access_token)
     return {
         "message": "oauth exchange success",
         "user": {
