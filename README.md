@@ -1,13 +1,13 @@
-﻿# WELD·BOT v3.2 (All-in-One Arc Flash Edition)
-
-![alt text](md_images/logo.png)
-
+﻿# WELD·BOT v4.0 
 
 
 # 1. 팀 소개
   
-   ## 팀명 
-    
+   ## 팀명 지지직
+<div align="center">
+  <img src="md_images/team_logo.png" alt="logo" width="700">
+</div>
+
    ## 팀원 소개 
 |이름|역할|GitHub|
 |------|---|---|
@@ -100,30 +100,30 @@
 | Data Ingestion | marker, pypdf, pymupdf4llm |
 | Infra | AWS S3(boto3), SSH Tunnel(sshtunnel/paramiko), Poetry | -->
 
-### FrontEnd
-<img src="https://img.shields.io/badge/streamlit-red?style=for-the-badge&logo=streamlit&logoColor=white">
-<img src="https://img.shields.io/badge/css-black?style=for-the-badge&logo=css&logoColor=b">
+### AI & LLM
+<img src="https://img.shields.io/badge/OpenAI_GPT--4o-412991?style=for-the-badge&logo=openai&logoColor=white">
+<img src="https://img.shields.io/badge/LangGraph-0052FF?style=for-the-badge&logo=langchain&logoColor=white">
+<img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white">
+<img src="https://img.shields.io/badge/Hugging_Face-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black">
 
-### BackEnd
-<img src="https://img.shields.io/badge/python-3776AB?style=for-the-badge&logo=python&logoColor=white">
-<img src="https://img.shields.io/badge/openai-0081A5?style=for-the-badge&logo=openaigym&logoColor=white"> 
-<img src="https://img.shields.io/badge/LLM-blue?style=for-the-badge&&logoColor=white"> 
-<img src="https://img.shields.io/badge/MARKER-black?style=for-the-badge&&logoColor=white">
-<img src="https://img.shields.io/badge/BM25-yellow?style=for-the-badge&&logoColor=white">
-<img src="https://img.shields.io/badge/fastapi-009688?style=for-the-badge&&logo=fastapi&logoColor=white"> 
+### Backend & API
+<img src="https://img.shields.io/badge/Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white">
+<img src="https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi&logoColor=white">
+<img src="https://img.shields.io/badge/Uvicorn-4051B5?style=for-the-badge&logo=uvicorn&logoColor=white">
+<img src="https://img.shields.io/badge/Pydantic-E92063?style=for-the-badge&logo=pydantic&logoColor=white">
+<img src="https://img.shields.io/badge/JWT-000000?style=for-the-badge&logo=json-web-tokens&logoColor=white">
 
-### Server
-<img src="https://img.shields.io/badge/amazone EC2-red?style=for-the-badge&logoColor=white">
+### Database & Infrastructure (AWS)
+<img src="https://img.shields.io/badge/AWS_RDS-527FFF?style=for-the-badge&logo=amazon-rds&logoColor=white">
+<img src="https://img.shields.io/badge/AWS_S3-569A31?style=for-the-badge&logo=amazon-s3&logoColor=white">
+<img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
+<img src="https://img.shields.io/badge/pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white">
+<img src="https://img.shields.io/badge/ChromaDB-00D1FF?style=for-the-badge&logo=google-cloud&logoColor=white">
 
-
-### DataBase
-<img src="https://img.shields.io/badge/postgresql-blue?style=for-the-badge&logo=streamlit&logoColor=white">
-<img src="https://img.shields.io/badge/pgvector-green?style=for-the-badge&logoColor=white">
-<img src="https://img.shields.io/badge/s3-red?style=for-the-badge&logoColor=white">
-
-### SCM
-<img src="https://img.shields.io/badge/git-black?style=for-the-badge&logo=git&logoColor=white">
-<img src="https://img.shields.io/badge/poetry-60A5FA?style=for-the-badge&logo=poetry&logoColor=white">
+### Frontend & Tools
+<img src="https://img.shields.io/badge/Streamlit-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white">
+<img src="https://img.shields.io/badge/Poetry-60A5FA?style=for-the-badge&logo=poetry&logoColor=white">
+<img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white">
 
 ## 사용 모델
 - `model_fast`: 기본 `gpt-5.2` (재작성/분류/검증)
@@ -330,27 +330,16 @@ WELD-BOT v4.0은 산업 현장의 용접·로봇·전기 기술 매뉴얼을 RAG
 ---
 
 # 6.TEST
-# 🧪 테스트 계획 및 결과 보고서
-
-**프로젝트**: WELD-BOT v4.0 (SKN23-3rd-2TEAM)  
-**평가 기준일**: 2026-03-03  
-**평가 담당**: 2팀
-
----
-
 <details>
-<summary><strong>## 6.1 테스트 개요</strong></summary>
+<summary><strong># 🧪 테스트 계획 및 결과 보고서</strong></summary>
+## 6.1 테스트 개요
 
 WELD-BOT v4.0의 RAG + LLM 파이프라인 품질을 검증하기 위해  
 **100건의 산업 현장 시나리오 기반 평가 데이터셋**을 구성하여 시스템 성능을 측정하였습니다.
 
-</details>
-
 ---
 
-<details>
-<summary><strong>## 6.2 테스트 계획</strong></summary>
-
+## 6.2 테스트 계획
 ### 6.2.1 테스트 목표
 
 | 목표 | 설명 |
@@ -378,12 +367,10 @@ WELD-BOT v4.0의 RAG + LLM 파이프라인 품질을 검증하기 위해
 | 출처 명시 여부 | `[출처: ...]` 태그 포함 여부 |
 | 응답 소요 시간(s) | API 호출부터 완성 응답까지 |
 
-</details>
 
 ---
 
-<details>
-<summary><strong>## 6.3 테스트 데이터셋 상세</strong></summary>
+## 6.3 테스트 데이터셋 상세
 
 ### 6.3.1 정답 유도 (50건)
 
@@ -403,12 +390,10 @@ WELD-BOT v4.0의 RAG + LLM 파이프라인 품질을 검증하기 위해
 | 브랜드 혼용 | 10건 | 야스카와 방식으로 현대 로봇 조작, 호환 안 되는 부품 교체 |
 | 도메인 무관 | 10건 | 김치찌개 레시피 등 |
 
-</details>
 
 ---
 
-<details>
-<summary><strong>## 6.4 테스트 결과</strong></summary>
+## 6.4 테스트 결과
 
 ### 6.4.1 정량 결과
 
@@ -439,12 +424,11 @@ WELD-BOT v4.0의 RAG + LLM 파이프라인 품질을 검증하기 위해
 - 전체 평가 결과: `weldbot_100_eval_results.csv`
 - 테스트 노트북: `notebooks/test_agent.ipynb`
 
-</details>
+
 
 ---
 
-<details>
-<summary><strong>## 6.5 시스템 통합 테스트</strong></summary>
+## 6.5 시스템 통합 테스트
 
 ### 6.5.1 테스트 환경
 
